@@ -10,6 +10,9 @@
 namespace cdf {
 
 inline constexpr std::uint64_t kRareFlag = 0x2;
+inline constexpr std::uint64_t kEnhancedFlag = 0x4;
+inline constexpr std::uint64_t kKnownFurnitureFlags =
+    kRareFlag | kEnhancedFlag;
 
 struct RoomAttributes {
     double comfort{};
@@ -44,8 +47,12 @@ struct FurnitureInstance {
         return (placement_flags & kRareFlag) != 0;
     }
 
+    [[nodiscard]] bool IsEnhanced() const noexcept {
+        return (placement_flags & kEnhancedFlag) != 0;
+    }
+
     [[nodiscard]] bool HasOnlyKnownFlags() const noexcept {
-        return (placement_flags & ~kRareFlag) == 0;
+        return (placement_flags & ~kKnownFurnitureFlags) == 0;
     }
 };
 
@@ -63,6 +70,7 @@ struct CombineCandidate {
     std::size_t scanned_count{};
     bool consume_placed{};
     bool promote_to_rare{};
+    bool promote_to_enhanced{};
 };
 
 [[nodiscard]] bool HasDuplicateStableKeys(
@@ -76,6 +84,7 @@ enum class ExecuteStatus {
     Success,
     PreconditionFailed,
     RareConversionFailed,
+    EnhancedConversionFailed,
     ConsumeFailed,
     VerificationFailed
 };
@@ -87,6 +96,8 @@ struct ExecuteResult {
     std::size_t after_count{};
     bool rare_rollback_attempted{};
     bool rare_rollback_succeeded{};
+    bool enhanced_rollback_attempted{};
+    bool enhanced_rollback_succeeded{};
 };
 
 class TransactionPort {
@@ -98,6 +109,13 @@ public:
         const std::string& item_id,
         std::uint64_t expected_flags) = 0;
     [[nodiscard]] virtual bool ClearRare(
+        std::uint64_t stable_key,
+        const std::string& item_id) = 0;
+    [[nodiscard]] virtual bool SetEnhanced(
+        std::uint64_t stable_key,
+        const std::string& item_id,
+        std::uint64_t expected_flags) = 0;
+    [[nodiscard]] virtual bool ClearEnhanced(
         std::uint64_t stable_key,
         const std::string& item_id) = 0;
     [[nodiscard]] virtual bool Consume(

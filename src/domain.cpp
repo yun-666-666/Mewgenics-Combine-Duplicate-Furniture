@@ -41,6 +41,7 @@ std::vector<CombineCandidate> FindCandidates(
         const auto definition = catalog.find(instance.item_id);
         if (instance.stable_key == 0 || instance.delete_pending ||
             !instance.HasOnlyKnownFlags() ||
+            instance.IsEnhanced() ||
             instance.runtime_match_count > 1 ||
             definition == catalog.end() ||
             !definition->second.can_be_rare) {
@@ -79,7 +80,8 @@ std::vector<CombineCandidate> FindCandidates(
                 consume->placement_flags,
                 snapshot.furniture.size(),
                 !consume->room_id.empty(),
-                !already_rare});
+                !already_rare,
+                already_rare});
         };
 
         std::vector<const FurnitureInstance*> placed_keeps;
@@ -146,12 +148,14 @@ bool MatchesSealed(
     const FurnitureInstance* instance,
     std::string_view item_id,
     std::uint64_t flags,
-    bool expected_rare) {
+    bool expected_rare,
+    bool expected_enhanced = false) {
     return instance && !instance->delete_pending &&
         instance->runtime_match_count <= 1 &&
         instance->item_id == item_id &&
         instance->placement_flags == flags &&
         instance->IsRare() == expected_rare &&
+        instance->IsEnhanced() == expected_enhanced &&
         instance->HasOnlyKnownFlags();
 }
 
@@ -195,6 +199,15 @@ ExecuteResult ExecuteCandidate(
         return result;
     }
 
+    if (candidate.promote_to_enhanced && !port.SetEnhanced(
+            candidate.keep_key,
+            candidate.item_id,
+            candidate.keep_flags)) {
+        result.status = ExecuteStatus::EnhancedConversionFailed;
+        result.stage = "set_enhanced";
+        return result;
+    }
+
     if (!port.Consume(
             candidate.consume_key,
             candidate.item_id,
@@ -205,6 +218,10 @@ ExecuteResult ExecuteCandidate(
             result.rare_rollback_attempted = true;
             result.rare_rollback_succeeded =
                 port.ClearRare(candidate.keep_key, candidate.item_id);
+        } else if (candidate.promote_to_enhanced) {
+            result.enhanced_rollback_attempted = true;
+            result.enhanced_rollback_succeeded =
+                port.ClearEnhanced(candidate.keep_key, candidate.item_id);
         }
         return result;
     }
@@ -216,7 +233,9 @@ ExecuteResult ExecuteCandidate(
     if (!after.complete || HasDuplicateStableKeys(after.furniture) ||
         after.furniture.size() + 1 != before.furniture.size() ||
         !kept || kept->item_id != candidate.item_id ||
-        kept->placement_flags != (candidate.keep_flags | kRareFlag) ||
+        kept->placement_flags !=
+            (candidate.keep_flags |
+             (candidate.promote_to_rare ? kRareFlag : kEnhancedFlag)) ||
         !kept->IsRare() || consumed != nullptr) {
         result.status = ExecuteStatus::VerificationFailed;
         result.stage = "post_scan";

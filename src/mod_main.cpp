@@ -178,7 +178,7 @@ std::string BatchPreview(
     }
     if (rare_pairs != 0U) {
         output << "- " << rare_pairs
-               << " 组 Rare 同款：每组保留 1 件 Rare，清掉 1 件重复件。\n";
+               << " 组 Rare 同款：每组保留 1 件强化 Rare（基础数值 4 倍），清掉 1 件重复件。\n";
     }
     output << "合计将消耗 " << candidates.size() << " 件重复家具。\n";
     if (placed_pairs != 0U) {
@@ -204,7 +204,7 @@ std::string BatchPreview(
         ++shown;
     }
 
-    output << "\n游戏原生没有 Rare 之上的家具稀有度；Rare+Rare 只会去重。\n"
+    output << "\n强化 Rare 会在保留实例上写入持久标记，保存并重开后仍为基础数值 4 倍。\n"
            << "合并会分散到连续游戏帧执行，完成提示会自动消失。\n"
            << "Rare 也会使负面属性翻倍。\n\n"
            << "游戏标记为不可 Rare 的特殊家具（例如食物箱）不会参与。\n\n"
@@ -335,19 +335,32 @@ void ProcessBatch(void* scene_manager) {
         StopBatch("set_rare", candidate, port.LastFailure());
         return;
     }
+    if (candidate.promote_to_enhanced && !port.SetEnhanced(
+            candidate.keep_key,
+            candidate.item_id,
+            candidate.keep_flags)) {
+        StopBatch("set_enhanced", candidate, port.LastFailure());
+        return;
+    }
 
     if (!port.Consume(
             candidate.consume_key,
             candidate.item_id,
             candidate.consume_flags)) {
         const auto failure = port.LastFailure();
-        const bool rollback = candidate.promote_to_rare &&
-            port.ClearRare(candidate.keep_key, candidate.item_id);
+        bool rollback{};
+        if (candidate.promote_to_rare) {
+            rollback = port.ClearRare(
+                candidate.keep_key, candidate.item_id);
+        } else if (candidate.promote_to_enhanced) {
+            rollback = port.ClearEnhanced(
+                candidate.keep_key, candidate.item_id);
+        }
         StopBatch(
             "consume",
             candidate,
             failure,
-            candidate.promote_to_rare,
+            candidate.promote_to_rare || candidate.promote_to_enhanced,
             rollback);
         return;
     }
@@ -362,7 +375,7 @@ void ProcessBatch(void* scene_manager) {
                 << " consume_key=" << candidate.consume_key
                 << " kind="
                 << (candidate.promote_to_rare ? "ordinary_to_rare" :
-                                                "rare_deduplicate")
+                                                "rare_to_enhanced")
                 << " stored_from_room=" << candidate.consume_placed;
         Log(message.str());
     }
@@ -524,6 +537,12 @@ bool ResolveAndHook() {
     g_mew_log = reinterpret_cast<MewLogFn>(
         GetProcAddress(mewjector, "MJ_Log"));
     if (!get_version || get_version() < 3 || !install_hook) {
+        return false;
+    }
+    if (!cdf::InstallEnhancedFurniturePatches()) {
+        if (g_mew_log) {
+            g_mew_log(kOwner, "Enhanced furniture patch signatures do not match");
+        }
         return false;
     }
     void* trampoline{};

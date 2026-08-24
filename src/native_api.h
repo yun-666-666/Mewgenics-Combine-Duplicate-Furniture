@@ -77,6 +77,12 @@ CdfNativeMutationResult cdf_native_set_rare(
     uint64_t expected_flags,
     uint8_t enabled);
 
+CdfNativeMutationResult cdf_native_set_enhanced(
+    uint64_t stable_key,
+    const char* expected_item,
+    uint64_t expected_flags,
+    uint8_t enabled);
+
 CdfNativeMutationResult cdf_native_consume(
     void* scene_manager,
     uint64_t stable_key,
@@ -91,6 +97,8 @@ CdfNativeStoreResult cdf_native_store(
 int cdf_native_scene_contains_component(
     void* scene_manager,
     const void* component);
+
+int cdf_native_install_enhanced_patches(void);
 
 #ifdef __cplusplus
 }

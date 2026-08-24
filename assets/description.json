@@ -1,7 +1,7 @@
 {
   "title": "Combine Duplicate Furniture",
-  "description": "Press F8 in furniture mode to batch-combine identical furniture: ordinary pairs become native Rare, while Rare pairs are consolidated into one Rare instance.",
+  "description": "Press F8 in furniture mode to batch-combine identical furniture: ordinary pairs become native Rare, while Rare pairs become one persistent 4x enhanced Rare instance.",
   "author": "OpenAI GPT-5",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "requirements": []
 }

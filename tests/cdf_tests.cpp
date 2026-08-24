@@ -68,7 +68,10 @@ public:
     bool set_rare_ok{true};
     bool consume_ok{true};
     bool clear_rare_ok{true};
+    bool set_enhanced_ok{true};
+    bool clear_enhanced_ok{true};
     int set_rare_calls{};
+    int set_enhanced_calls{};
     int consume_calls{};
 
     ScanSnapshot Scan() override { return current; }
@@ -101,6 +104,38 @@ public:
             return false;
         }
         found->placement_flags &= ~cdf::kRareFlag;
+        return true;
+    }
+
+    bool SetEnhanced(
+        std::uint64_t key,
+        const std::string& id,
+        std::uint64_t expected_flags) override {
+        ++set_enhanced_calls;
+        if (!set_enhanced_ok) {
+            return false;
+        }
+        auto found = Find(key, id);
+        if (found == current.furniture.end() ||
+            found->placement_flags != expected_flags ||
+            !found->IsRare()) {
+            return false;
+        }
+        found->placement_flags |= cdf::kEnhancedFlag;
+        return true;
+    }
+
+    bool ClearEnhanced(
+        std::uint64_t key,
+        const std::string& id) override {
+        if (!clear_enhanced_ok) {
+            return false;
+        }
+        auto found = Find(key, id);
+        if (found == current.furniture.end()) {
+            return false;
+        }
+        found->placement_flags &= ~cdf::kEnhancedFlag;
         return true;
     }
 
@@ -230,6 +265,7 @@ void TwoRareCreateConsolidationCandidate() {
     CHECK(candidates[0].keep_key == 1);
     CHECK(candidates[0].consume_key == 2);
     CHECK(!candidates[0].promote_to_rare);
+    CHECK(candidates[0].promote_to_enhanced);
 }
 
 void CanBeRareFalseDoesNotCombine() {
@@ -237,9 +273,17 @@ void CanBeRareFalseDoesNotCombine() {
         Snapshot({Item(1), Item(2)}), Catalog(false)).empty());
 }
 
+void EnhancedFurnitureDoesNotCombineAgain() {
+    CHECK(cdf::FindCandidates(
+        Snapshot({
+            Item(1, "chair", cdf::kRareFlag | cdf::kEnhancedFlag),
+            Item(2, "chair", cdf::kRareFlag)}),
+        Catalog()).empty());
+}
+
 void UnknownPlacementFlagDoesNotCombine() {
     CHECK(cdf::FindCandidates(
-        Snapshot({Item(1), Item(2, "chair", 0x4)}),
+        Snapshot({Item(1), Item(2, "chair", 0x8)}),
         Catalog()).empty());
 }
 
@@ -291,9 +335,11 @@ void RareExecutionConsumesDuplicateWithoutConversion() {
     const auto result = cdf::ExecuteCandidate(candidate, port);
     CHECK(result.status == ExecuteStatus::Success);
     CHECK(port.set_rare_calls == 0);
+    CHECK(port.set_enhanced_calls == 1);
     CHECK(port.consume_calls == 1);
     CHECK(port.current.furniture.size() == 1);
     CHECK(port.current.furniture[0].IsRare());
+    CHECK(port.current.furniture[0].IsEnhanced());
 }
 
 void StableKeyChangeCancels() {
@@ -320,7 +366,7 @@ void ConsumeFailureIsNotSuccess() {
     CHECK(!port.current.furniture[0].IsRare());
 }
 
-void RareConsumeFailureDoesNotClearExistingRare() {
+void RareConsumeFailureRollsBackEnhancement() {
     const auto snapshot = Snapshot({
         Item(1, "chair", cdf::kRareFlag),
         Item(2, "chair", cdf::kRareFlag)});
@@ -330,12 +376,34 @@ void RareConsumeFailureDoesNotClearExistingRare() {
     port.consume_ok = false;
     const auto result = cdf::ExecuteCandidate(candidate, port);
     CHECK(result.status == ExecuteStatus::ConsumeFailed);
-    CHECK(!result.rare_rollback_attempted);
-    CHECK(!result.rare_rollback_succeeded);
+    CHECK(result.enhanced_rollback_attempted);
+    CHECK(result.enhanced_rollback_succeeded);
     CHECK(port.current.furniture.size() == 2);
     CHECK(std::ranges::all_of(
         port.current.furniture,
         [](const auto& item) { return item.IsRare(); }));
+    CHECK(std::ranges::none_of(
+        port.current.furniture,
+        [](const auto& item) { return item.IsEnhanced(); }));
+}
+
+void EnhancedConversionFailureLeavesBothRare() {
+    const auto snapshot = Snapshot({
+        Item(1, "chair", cdf::kRareFlag),
+        Item(2, "chair", cdf::kRareFlag)});
+    auto candidate = FirstCandidate(snapshot, Catalog());
+    FakePort port;
+    port.current = snapshot;
+    port.set_enhanced_ok = false;
+    const auto result = cdf::ExecuteCandidate(candidate, port);
+    CHECK(result.status == ExecuteStatus::EnhancedConversionFailed);
+    CHECK(port.current.furniture.size() == 2);
+    CHECK(std::ranges::all_of(
+        port.current.furniture,
+        [](const auto& item) { return item.IsRare(); }));
+    CHECK(std::ranges::none_of(
+        port.current.furniture,
+        [](const auto& item) { return item.IsEnhanced(); }));
 }
 
 void RareConversionFailureLeavesBothOrdinary() {
@@ -379,6 +447,7 @@ int main() {
         {"ordinary rare", OrdinaryAndRareDoNotCombine},
         {"two rare", TwoRareCreateConsolidationCandidate},
         {"can_be_rare false", CanBeRareFalseDoesNotCombine},
+        {"enhanced not recombined", EnhancedFurnitureDoesNotCombineAgain},
         {"unknown flags", UnknownPlacementFlagDoesNotCombine},
         {"deterministic order", CandidateOrderIsDeterministic},
         {"fridge preview", FridgePreviewAttributesDouble},
@@ -387,7 +456,8 @@ int main() {
         {"rare group", RareExecutionConsumesDuplicateWithoutConversion},
         {"stable key change", StableKeyChangeCancels},
         {"consume failure", ConsumeFailureIsNotSuccess},
-        {"rare consume failure", RareConsumeFailureDoesNotClearExistingRare},
+        {"rare consume failure", RareConsumeFailureRollsBackEnhancement},
+        {"enhanced failure", EnhancedConversionFailureLeavesBothRare},
         {"rare failure", RareConversionFailureLeavesBothOrdinary},
         {"delete pending", DeletePendingIsNotCandidate},
         {"duplicate stable key", DuplicateStableKeysAreRejected}};
@@ -401,6 +471,6 @@ int main() {
         std::cerr << g_failures << " focused checks failed\n";
         return EXIT_FAILURE;
     }
-    std::cout << "All 23 focused checks passed\n";
+    std::cout << "All 25 focused checks passed\n";
     return EXIT_SUCCESS;
 }

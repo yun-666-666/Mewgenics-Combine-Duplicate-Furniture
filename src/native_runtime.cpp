@@ -102,6 +102,35 @@ bool NativeTransactionPort::ClearRare(
     return result.success != 0;
 }
 
+bool NativeTransactionPort::SetEnhanced(
+    std::uint64_t stable_key,
+    const std::string& item_id,
+    std::uint64_t expected_flags) {
+    const auto result = cdf_native_set_enhanced(
+        stable_key, item_id.c_str(), expected_flags, 1U);
+    last_failure_ = {result.seh_code, result.exception_rva};
+    return result.success != 0;
+}
+
+bool NativeTransactionPort::ClearEnhanced(
+    std::uint64_t stable_key,
+    const std::string& item_id) {
+    const auto snapshot = Scan();
+    const auto found = std::ranges::find_if(
+        snapshot.furniture,
+        [stable_key, &item_id](const auto& instance) {
+            return instance.stable_key == stable_key &&
+                instance.item_id == item_id;
+        });
+    if (found == snapshot.furniture.end()) {
+        return false;
+    }
+    const auto result = cdf_native_set_enhanced(
+        stable_key, item_id.c_str(), found->placement_flags, 0U);
+    last_failure_ = {result.seh_code, result.exception_rva};
+    return result.success != 0;
+}
+
 bool NativeTransactionPort::Consume(
     std::uint64_t stable_key,
     const std::string& item_id,
@@ -147,6 +176,10 @@ bool SceneContainsComponent(
     void* scene_manager,
     const void* component) noexcept {
     return cdf_native_scene_contains_component(scene_manager, component) != 0;
+}
+
+bool InstallEnhancedFurniturePatches() noexcept {
+    return cdf_native_install_enhanced_patches() != 0;
 }
 
 }  // namespace cdf

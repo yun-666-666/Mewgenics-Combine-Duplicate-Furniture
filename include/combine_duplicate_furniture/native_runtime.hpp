@@ -24,6 +24,13 @@ public:
     [[nodiscard]] bool ClearRare(
         std::uint64_t stable_key,
         const std::string& item_id) override;
+    [[nodiscard]] bool SetEnhanced(
+        std::uint64_t stable_key,
+        const std::string& item_id,
+        std::uint64_t expected_flags) override;
+    [[nodiscard]] bool ClearEnhanced(
+        std::uint64_t stable_key,
+        const std::string& item_id) override;
     [[nodiscard]] bool Consume(
         std::uint64_t stable_key,
         const std::string& item_id,
@@ -49,5 +56,6 @@ private:
 [[nodiscard]] bool SceneContainsComponent(
     void* scene_manager,
     const void* component) noexcept;
+[[nodiscard]] bool InstallEnhancedFurniturePatches() noexcept;
 
 }  // namespace cdf

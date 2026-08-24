@@ -10,6 +10,11 @@ enum {
     CDF_FURNITURE_STORAGE_DELETE_RVA = 0x2052E0,
     CDF_FURNITURE_STORE_PIECE_RVA = 0x2EF0D0,
     CDF_FURNITURE_STORAGE_GLOBAL_RVA = 0x13D16E0,
+    CDF_FURNITURE_LIST_EFFECT_COUNT_RVA = 0x2EA2D7,
+    CDF_FURNITURE_LIST_VALUE_FLAGS_1_RVA = 0x1A0012,
+    CDF_FURNITURE_LIST_VALUE_FLAGS_2_RVA = 0x1A0097,
+    CDF_FURNITURE_DETAIL_VALUE_FLAGS_1_RVA = 0x1A11F6,
+    CDF_FURNITURE_DETAIL_VALUE_FLAGS_2_RVA = 0x1A1276,
     CDF_FURNITURE_PIECE_VTABLE_RVA = 0xEDE690,
     CDF_FURNITURE_BUILDING_UI_VTABLE_RVA = 0xF082A8,
     CDF_SCENE_COMPONENT_LIST_OFFSET = 0x18,
@@ -42,6 +47,27 @@ typedef struct CdfPointerVector {
 
 typedef void (__fastcall* CdfStorageDeleteFn)(void*, uint64_t);
 typedef void (__fastcall* CdfStorePieceFn)(void*);
+
+static int cdf_readable(const void* pointer, size_t byte_count);
+
+static int cdf_patch_bytes(
+    uint8_t* address,
+    const uint8_t* expected,
+    const uint8_t* replacement,
+    size_t size) {
+    DWORD old_protect;
+    DWORD ignored;
+    if (!address || !expected || !replacement || size == 0U ||
+        !cdf_readable(address, size) ||
+        memcmp(address, expected, size) != 0 ||
+        !VirtualProtect(address, size, PAGE_EXECUTE_READWRITE, &old_protect)) {
+        return 0;
+    }
+    memcpy(address, replacement, size);
+    FlushInstructionCache(GetCurrentProcess(), address, size);
+    VirtualProtect(address, size, old_protect, &ignored);
+    return memcmp(address, replacement, size) == 0;
+}
 
 static int cdf_readable(const void* pointer, size_t byte_count) {
     uintptr_t current;
@@ -459,7 +485,7 @@ CdfNativeMutationResult cdf_native_set_rare(
         return result;
     }
     entry = cdf_find_entry(stable_key, expected_item, &flags);
-    if (!entry || flags != expected_flags || (flags & ~2ULL) != 0ULL) {
+    if (!entry || flags != expected_flags || (flags & ~6ULL) != 0ULL) {
         return result;
     }
     __try {
@@ -472,6 +498,42 @@ CdfNativeMutationResult cdf_native_set_rare(
         }
         result.success = (uint8_t)(
             ((*(uint64_t*)((uint8_t*)entry + CDF_ENTRY_FLAGS_OFFSET) & 2ULL)
+             != 0ULL) == (enabled != 0U));
+    }
+    __except (cdf_capture_exception(
+        GetExceptionInformation(), &result.seh_code, &result.exception_rva)) {
+        result.success = 0U;
+    }
+    return result;
+}
+
+CdfNativeMutationResult cdf_native_set_enhanced(
+    uint64_t stable_key,
+    const char* expected_item,
+    uint64_t expected_flags,
+    uint8_t enabled) {
+    CdfNativeMutationResult result;
+    uint64_t flags;
+    void* entry;
+    memset(&result, 0, sizeof(result));
+    if (!cdf_signatures_valid()) {
+        return result;
+    }
+    entry = cdf_find_entry(stable_key, expected_item, &flags);
+    if (!entry || flags != expected_flags || (flags & ~6ULL) != 0ULL ||
+        (enabled && (flags & 2ULL) == 0ULL)) {
+        return result;
+    }
+    __try {
+        if (enabled) {
+            *(uint64_t*)((uint8_t*)entry + CDF_ENTRY_FLAGS_OFFSET) =
+                flags | 4ULL;
+        } else {
+            *(uint64_t*)((uint8_t*)entry + CDF_ENTRY_FLAGS_OFFSET) =
+                flags & ~4ULL;
+        }
+        result.success = (uint8_t)(
+            ((*(uint64_t*)((uint8_t*)entry + CDF_ENTRY_FLAGS_OFFSET) & 4ULL)
              != 0ULL) == (enabled != 0U));
     }
     __except (cdf_capture_exception(
@@ -500,7 +562,7 @@ CdfNativeMutationResult cdf_native_consume(
     entry = cdf_find_entry(stable_key, expected_item, &flags);
     cdf_find_piece(scene_manager, stable_key, &piece_count);
     if (!storage || !entry || flags != expected_flags ||
-        (flags & ~2ULL) != 0ULL ||
+        (flags & ~6ULL) != 0ULL ||
         piece_count != 0U) {
         return result;
     }
@@ -554,11 +616,11 @@ CdfNativeStoreResult cdf_native_store(
     if (piece_count == 1U) {
         result.probe_flags |= CDF_STORE_PROBE_PIECE_COUNT_ONE;
     }
-    if (entry && (flags & ~2ULL) == 0ULL) {
+    if (entry && (flags & ~6ULL) == 0ULL) {
         result.probe_flags |= CDF_STORE_PROBE_FLAGS_VALID;
     }
     if (!entry || !piece || piece_count != 1U ||
-        (flags & ~2ULL) != 0ULL) {
+        (flags & ~6ULL) != 0ULL) {
         return result;
     }
     __try {
@@ -628,4 +690,73 @@ CdfNativeStoreResult cdf_native_store(
         result.success = 0U;
     }
     return result;
+}
+
+int cdf_native_install_enhanced_patches(void) {
+    static int installed;
+    static const uint8_t value_expected[] = {0x80, 0xE3, 0x01};
+    static const uint8_t value_replacement[] = {0x80, 0xE3, 0x03};
+    static const uint8_t count_expected[] = {
+        0xF6, 0x42, 0x28, 0x02,
+        0xB8, 0x00, 0x00, 0x00, 0x00,
+        0x0F, 0x95, 0xC0,
+        0xFF, 0xC0};
+    static const uint8_t count_replacement[] = {
+        0x8B, 0x42, 0x28,
+        0x83, 0xE0, 0x06,
+        0xD1, 0xE8,
+        0xFF, 0xC0,
+        0x90, 0x90, 0x90, 0x90};
+    uint8_t* executable = (uint8_t*)GetModuleHandleW(NULL);
+    const uintptr_t value_rvas[] = {
+        CDF_FURNITURE_LIST_VALUE_FLAGS_1_RVA,
+        CDF_FURNITURE_LIST_VALUE_FLAGS_2_RVA,
+        CDF_FURNITURE_DETAIL_VALUE_FLAGS_1_RVA,
+        CDF_FURNITURE_DETAIL_VALUE_FLAGS_2_RVA};
+    size_t index;
+    if (installed) {
+        return 1;
+    }
+    if (!executable || !cdf_signatures_valid()) {
+        return 0;
+    }
+    for (index = 0; index < sizeof(value_rvas) / sizeof(value_rvas[0]);
+         ++index) {
+        if (!cdf_readable(
+                executable + value_rvas[index], sizeof(value_expected)) ||
+            memcmp(
+                executable + value_rvas[index],
+                value_expected,
+                sizeof(value_expected)) != 0) {
+            return 0;
+        }
+    }
+    if (!cdf_readable(
+            executable + CDF_FURNITURE_LIST_EFFECT_COUNT_RVA,
+            sizeof(count_expected)) ||
+        memcmp(
+            executable + CDF_FURNITURE_LIST_EFFECT_COUNT_RVA,
+            count_expected,
+            sizeof(count_expected)) != 0) {
+        return 0;
+    }
+    for (index = 0; index < sizeof(value_rvas) / sizeof(value_rvas[0]);
+         ++index) {
+        if (!cdf_patch_bytes(
+                executable + value_rvas[index],
+                value_expected,
+                value_replacement,
+                sizeof(value_expected))) {
+            return 0;
+        }
+    }
+    if (!cdf_patch_bytes(
+            executable + CDF_FURNITURE_LIST_EFFECT_COUNT_RVA,
+            count_expected,
+            count_replacement,
+            sizeof(count_expected))) {
+        return 0;
+    }
+    installed = 1;
+    return 1;
 }
