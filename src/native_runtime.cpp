@@ -3,9 +3,9 @@
 #include "native_api.h"
 
 #include <algorithm>
-#include <array>
 #include <iomanip>
 #include <sstream>
+#include <vector>
 
 namespace cdf {
 
@@ -53,7 +53,7 @@ NativeTransactionPort::NativeTransactionPort(void* scene_manager) noexcept
     : scene_manager_(scene_manager) {}
 
 ScanSnapshot NativeTransactionPort::Scan() {
-    std::array<CdfNativeFurniture, 4096> native{};
+    std::vector<CdfNativeFurniture> native(4096);
     const auto scanned = cdf_native_scan(
         scene_manager_, native.data(), native.size());
     signatures_valid_ = scanned.signatures_valid != 0;
