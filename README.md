@@ -70,9 +70,9 @@ The log is written to:
 Mods/CombineDuplicateFurniture/logs/CombineDuplicateFurniture.log
 ```
 
-## Compatibility
+## Acknowledgements
 
-The mod does not use a game-version-number whitelist or intentionally block unknown game versions. It has been tested on the current Mewgenics build available during development. Because it integrates with native game furniture structures, a future game update that changes those structures may still require a compatibility update.
+This project was completed with GPT-5.6. Thank you to all Mewgenics players who tested the mod and shared their feedback.
 
 ## Building
 
@@ -156,6 +156,6 @@ Mods/CombineDuplicateFurniture/config.json
 Mods/CombineDuplicateFurniture/logs/CombineDuplicateFurniture.log
 ```
 
-## 兼容性
+## 致谢
 
-MOD 不设置游戏版本号白名单，也不会因为检测到未知游戏版本而主动禁止运行。当前功能已在开发时可用的 Mewgenics 版本中完成测试。由于 MOD 会调用游戏内部的原生家具结构，如果未来游戏更新修改了这些内部结构，仍可能需要进行兼容性适配。
+本项目由 GPT-5.6 完成。感谢所有参与测试并提供反馈的 Mewgenics 玩家。
