@@ -60,6 +60,7 @@ struct CombineCandidate {
     std::uint64_t keep_flags{};
     std::uint64_t consume_flags{};
     std::size_t scanned_count{};
+    bool consume_placed{};
 };
 
 [[nodiscard]] bool HasDuplicateStableKeys(

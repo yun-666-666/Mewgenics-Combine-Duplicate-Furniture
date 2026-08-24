@@ -65,7 +65,16 @@ bool NativeTransactionPort::Consume(
     const auto result = cdf_native_consume(
         scene_manager_, stable_key, item_id.c_str());
     last_failure_ = {result.seh_code, result.exception_rva};
-    last_consumed_component_ = result.pending_component;
+    return result.success != 0;
+}
+
+bool NativeTransactionPort::Store(
+    std::uint64_t stable_key,
+    const std::string& item_id) {
+    const auto result = cdf_native_store(
+        scene_manager_, stable_key, item_id.c_str());
+    last_failure_ = {result.seh_code, result.exception_rva};
+    last_stored_component_ = result.pending_component;
     return result.success != 0;
 }
 
@@ -77,8 +86,8 @@ NativeFailure NativeTransactionPort::LastFailure() const noexcept {
     return last_failure_;
 }
 
-void* NativeTransactionPort::LastConsumedComponent() const noexcept {
-    return last_consumed_component_;
+void* NativeTransactionPort::LastStoredComponent() const noexcept {
+    return last_stored_component_;
 }
 
 bool FurnitureModeActive(void* scene_manager) noexcept {

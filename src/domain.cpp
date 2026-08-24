@@ -49,19 +49,42 @@ std::vector<CombineCandidate> FindCandidates(
     }
 
     for (auto& [item_id, instances] : by_item) {
-        std::ranges::sort(instances, [](const auto* left, const auto* right) {
+        std::vector<const FurnitureInstance*> placed;
+        std::vector<const FurnitureInstance*> stored;
+        for (const auto* instance : instances) {
+            (instance->runtime_match_count == 1 ? placed : stored)
+                .push_back(instance);
+        }
+        const auto by_key = [](const auto* left, const auto* right) {
             return left->stable_key < right->stable_key;
-        });
-        for (std::size_t index = 0; index + 1 < instances.size(); index += 2) {
-            const auto* keep = instances[index];
-            const auto* consume = instances[index + 1];
+        };
+        std::ranges::sort(placed, by_key);
+        std::ranges::sort(stored, by_key);
+
+        const auto add_pair = [&](const auto* keep, const auto* consume) {
             result.push_back({
                 item_id,
                 keep->stable_key,
                 consume->stable_key,
                 keep->placement_flags,
                 consume->placement_flags,
-                snapshot.furniture.size()});
+                snapshot.furniture.size(),
+                consume->runtime_match_count == 1});
+        };
+
+        const auto mixed = std::min(placed.size(), stored.size());
+        for (std::size_t index = 0; index < mixed; ++index) {
+            add_pair(placed[index], stored[index]);
+        }
+        for (std::size_t index = mixed;
+             index + 1 < stored.size();
+             index += 2) {
+            add_pair(stored[index], stored[index + 1]);
+        }
+        for (std::size_t index = mixed;
+             index + 1 < placed.size();
+             index += 2) {
+            add_pair(placed[index], placed[index + 1]);
         }
     }
     return result;

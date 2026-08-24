@@ -46,6 +46,8 @@ struct BatchState {
     std::vector<cdf::CombineCandidate> candidates;
     std::size_t next_index{};
     void* pending_component{};
+    bool placed_store_approved{};
+    bool material_stored{};
 };
 
 BatchState g_batch;
@@ -161,14 +163,21 @@ void ShowTransient(
 std::string BatchPreview(
     const std::vector<cdf::CombineCandidate>& candidates) {
     std::map<std::string, std::size_t> pair_counts;
+    std::size_t placed_pairs{};
     for (const auto& candidate : candidates) {
         ++pair_counts[candidate.item_id];
+        placed_pairs += candidate.consume_placed ? 1U : 0U;
     }
 
     std::ostringstream output;
     output << "发现 " << candidates.size() << " 组可合并的普通家具。\n\n"
            << "确认后将消耗 " << candidates.size() << " 件普通家具，\n"
-           << "并保留 " << candidates.size() << " 件原生 Rare 家具。\n\n";
+           << "并保留 " << candidates.size() << " 件原生 Rare 家具。\n";
+    if (placed_pairs != 0U) {
+        output << "其中 " << placed_pairs
+               << " 组需要先把材料家具从房间收回家具栏。\n";
+    }
+    output << '\n';
 
     std::size_t shown{};
     constexpr std::size_t kMaxShownTypes = 12;
@@ -277,6 +286,19 @@ void FinishBatch() {
     ClearBatch();
 }
 
+void CancelBatchForPlacedFurniture() {
+    Log("batch cancelled at placed-furniture confirmation completed=" +
+        std::to_string(g_batch.next_index) +
+        " planned=" + std::to_string(g_batch.candidates.size()));
+    ShowTransient(
+        "已取消房间家具合并。本批次已完成 " +
+            std::to_string(g_batch.next_index) + " / " +
+            std::to_string(g_batch.candidates.size()) + " 组。",
+        MB_ICONINFORMATION,
+        3000U);
+    ClearBatch();
+}
+
 void ProcessBatch(void* scene_manager) {
     if (!g_busy) {
         return;
@@ -288,10 +310,12 @@ void ProcessBatch(void* scene_manager) {
             return;
         }
         g_batch.pending_component = nullptr;
-        if (g_batch.next_index == g_batch.candidates.size()) {
-            FinishBatch();
-            return;
-        }
+        Log("room furniture stored item=" +
+            g_batch.candidates[g_batch.next_index].item_id +
+            " consume_key=" +
+            std::to_string(
+                g_batch.candidates[g_batch.next_index].consume_key));
+        return;
     }
 
     if (g_batch.next_index >= g_batch.candidates.size()) {
@@ -301,6 +325,50 @@ void ProcessBatch(void* scene_manager) {
 
     const auto candidate = g_batch.candidates[g_batch.next_index];
     cdf::NativeTransactionPort port(scene_manager);
+    if (candidate.consume_placed && !g_batch.material_stored) {
+        if (!g_batch.placed_store_approved) {
+            std::size_t remaining_placed{};
+            for (std::size_t index = g_batch.next_index;
+                 index < g_batch.candidates.size();
+                 ++index) {
+                remaining_placed +=
+                    g_batch.candidates[index].consume_placed ? 1U : 0U;
+            }
+            const auto definition = g_catalog.find(candidate.item_id);
+            const auto name = definition != g_catalog.end()
+                ? definition->second.display_name
+                : candidate.item_id;
+            const auto choice = MessageBoxW(
+                nullptr,
+                Wide(
+                    "接下来有 " + std::to_string(remaining_placed) +
+                    " 组材料家具位于房间中。\n\n"
+                    "将先把这些家具逐件收回家具栏，再执行合并。\n"
+                    "本批次后续房间家具不再重复提示。\n\n"
+                    "当前家具：" + name + "\n\n继续？").c_str(),
+                L"确认收回房间家具",
+                MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 |
+                    MB_SETFOREGROUND);
+            if (choice != IDYES) {
+                CancelBatchForPlacedFurniture();
+                return;
+            }
+            g_batch.placed_store_approved = true;
+            Log("placed furniture store approved remaining=" +
+                std::to_string(remaining_placed));
+        }
+
+        if (!port.Store(candidate.consume_key, candidate.item_id)) {
+            StopBatch("store", candidate, port.LastFailure());
+            return;
+        }
+        g_batch.pending_component = port.LastStoredComponent();
+        g_batch.material_stored = true;
+        Log("room furniture store queued item=" + candidate.item_id +
+            " consume_key=" + std::to_string(candidate.consume_key));
+        return;
+    }
+
     if (!port.SetRare(
             candidate.keep_key,
             candidate.item_id,
@@ -317,8 +385,9 @@ void ProcessBatch(void* scene_manager) {
         return;
     }
 
-    g_batch.pending_component = port.LastConsumedComponent();
     ++g_batch.next_index;
+    const bool stored_from_room = g_batch.material_stored;
+    g_batch.material_stored = false;
     {
         std::ostringstream message;
         message << "batch pair complete index=" << g_batch.next_index
@@ -326,13 +395,11 @@ void ProcessBatch(void* scene_manager) {
                 << " item=" << candidate.item_id
                 << " keep_key=" << candidate.keep_key
                 << " consume_key=" << candidate.consume_key
-                << " scene_delete="
-                << (g_batch.pending_component != nullptr);
+                << " stored_from_room=" << stored_from_room;
         Log(message.str());
     }
 
-    if (g_batch.next_index == g_batch.candidates.size() &&
-        !g_batch.pending_component) {
+    if (g_batch.next_index == g_batch.candidates.size()) {
         FinishBatch();
     }
 }

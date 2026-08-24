@@ -50,6 +50,11 @@ CdfNativeMutationResult cdf_native_consume(
     uint64_t stable_key,
     const char* expected_item);
 
+CdfNativeMutationResult cdf_native_store(
+    void* scene_manager,
+    uint64_t stable_key,
+    const char* expected_item);
+
 int cdf_native_scene_contains_component(
     void* scene_manager,
     const void* component);

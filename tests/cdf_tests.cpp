@@ -145,6 +145,25 @@ void MultipleOrdinaryCreatesAllPairs() {
     CHECK(candidates[1].consume_key == 4);
 }
 
+void StoredMaterialIsPreferred() {
+    const auto candidates = cdf::FindCandidates(
+        Snapshot({Item(8, "chair", 0, false, 1), Item(3)}), Catalog());
+    CHECK(candidates.size() == 1);
+    CHECK(candidates[0].keep_key == 8);
+    CHECK(candidates[0].consume_key == 3);
+    CHECK(!candidates[0].consume_placed);
+}
+
+void TwoPlacedRequireStoreConfirmation() {
+    const auto candidates = cdf::FindCandidates(
+        Snapshot({
+            Item(8, "chair", 0, false, 1),
+            Item(3, "chair", 0, false, 1)}),
+        Catalog());
+    CHECK(candidates.size() == 1);
+    CHECK(candidates[0].consume_placed);
+}
+
 void DifferentItemsDoNotCombine() {
     CHECK(cdf::FindCandidates(
         Snapshot({Item(1, "chair"), Item(2, "table")}),
@@ -270,6 +289,8 @@ int main() {
     const std::vector<std::pair<const char*, std::function<void()>>> tests{
         {"same ordinary", SameOrdinaryCreatesCandidate},
         {"all ordinary pairs", MultipleOrdinaryCreatesAllPairs},
+        {"stored material preferred", StoredMaterialIsPreferred},
+        {"placed material confirmation", TwoPlacedRequireStoreConfirmation},
         {"different item", DifferentItemsDoNotCombine},
         {"ordinary rare", OrdinaryAndRareDoNotCombine},
         {"two rare", TwoRareDoNotCombine},
@@ -294,6 +315,6 @@ int main() {
         std::cerr << g_failures << " focused checks failed\n";
         return EXIT_FAILURE;
     }
-    std::cout << "All 16 focused checks passed\n";
+    std::cout << "All 18 focused checks passed\n";
     return EXIT_SUCCESS;
 }

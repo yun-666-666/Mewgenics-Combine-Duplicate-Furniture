@@ -8,7 +8,7 @@
 enum {
     CDF_SCENE_READY_UPDATE_RVA = 0x962820,
     CDF_FURNITURE_STORAGE_DELETE_RVA = 0x2052E0,
-    CDF_FURNITURE_TRASH_RVA = 0x2EF0D0,
+    CDF_FURNITURE_STORE_PIECE_RVA = 0x2EF0D0,
     CDF_FURNITURE_STORAGE_GLOBAL_RVA = 0x13D16E0,
     CDF_FURNITURE_PIECE_VTABLE_RVA = 0xEDE690,
     CDF_FURNITURE_BUILDING_UI_VTABLE_RVA = 0xF082A8,
@@ -20,6 +20,7 @@ enum {
     CDF_PIECE_ENTRY_OFFSET = 0x2D8,
     CDF_ENTRY_ITEM_OFFSET = 0x08,
     CDF_ENTRY_FLAGS_OFFSET = 0x28,
+    CDF_ENTRY_ROOM_OFFSET = 0x30,
     CDF_STORAGE_COUNT_OFFSET = 0x3C,
     CDF_STORAGE_DATA_OFFSET = 0x40
 };
@@ -40,7 +41,7 @@ typedef struct CdfPointerVector {
 } CdfPointerVector;
 
 typedef void (__fastcall* CdfStorageDeleteFn)(void*, uint64_t);
-typedef void (__fastcall* CdfTrashPieceFn)(void*);
+typedef void (__fastcall* CdfStorePieceFn)(void*);
 
 static int cdf_readable(const void* pointer, size_t byte_count) {
     uintptr_t current;
@@ -150,7 +151,7 @@ static int cdf_signatures_valid(void) {
         0x40, 0x57, 0x48, 0x83, 0xEC, 0x20,
         0x44, 0x8B, 0x51, 0x3C,
         0x45, 0x33, 0xC0};
-    static const uint8_t trash_signature[] = {
+    static const uint8_t store_signature[] = {
         0x40, 0x53, 0x48, 0x83, 0xEC, 0x20,
         0x48, 0x8B, 0xD9,
         0xE8, 0xF2, 0xF2, 0xFF, 0xFF};
@@ -161,9 +162,9 @@ static int cdf_signatures_valid(void) {
             delete_signature,
             sizeof(delete_signature)) &&
         cdf_signature(
-            executable + CDF_FURNITURE_TRASH_RVA,
-            trash_signature,
-            sizeof(trash_signature));
+            executable + CDF_FURNITURE_STORE_PIECE_RVA,
+            store_signature,
+            sizeof(store_signature));
 }
 
 static int cdf_valid_vtable(
@@ -481,7 +482,6 @@ CdfNativeMutationResult cdf_native_consume(
     uint8_t* executable = (uint8_t*)GetModuleHandleW(NULL);
     void* storage;
     void* entry;
-    void* piece;
     uint64_t flags;
     uint32_t piece_count;
     memset(&result, 0, sizeof(result));
@@ -490,22 +490,61 @@ CdfNativeMutationResult cdf_native_consume(
     }
     storage = cdf_storage();
     entry = cdf_find_entry(stable_key, expected_item, &flags);
-    piece = cdf_find_piece(scene_manager, stable_key, &piece_count);
+    cdf_find_piece(scene_manager, stable_key, &piece_count);
     if (!storage || !entry || (flags & ~2ULL) != 0ULL ||
-        piece_count > 1U) {
+        piece_count != 0U) {
         return result;
     }
     __try {
-        if (piece_count == 1U && piece) {
-            result.pending_component = piece;
-            ((CdfTrashPieceFn)(executable + CDF_FURNITURE_TRASH_RVA))(piece);
-        } else {
-            ((CdfStorageDeleteFn)(
-                executable + CDF_FURNITURE_STORAGE_DELETE_RVA))(
-                    storage, stable_key);
-        }
+        ((CdfStorageDeleteFn)(
+            executable + CDF_FURNITURE_STORAGE_DELETE_RVA))(
+                storage, stable_key);
         result.success = (uint8_t)(
             cdf_find_entry(stable_key, expected_item, NULL) == NULL);
+    }
+    __except (cdf_capture_exception(GetExceptionInformation(), &result)) {
+        result.success = 0U;
+    }
+    return result;
+}
+
+CdfNativeMutationResult cdf_native_store(
+    void* scene_manager,
+    uint64_t stable_key,
+    const char* expected_item) {
+    CdfNativeMutationResult result;
+    uint8_t* executable = (uint8_t*)GetModuleHandleW(NULL);
+    void* entry;
+    void* piece;
+    uint64_t flags;
+    uint32_t piece_count;
+    char room[CDF_NATIVE_TEXT_CAPACITY];
+    memset(&result, 0, sizeof(result));
+    if (!scene_manager || !cdf_signatures_valid()) {
+        return result;
+    }
+    entry = cdf_find_entry(stable_key, expected_item, &flags);
+    piece = cdf_find_piece(scene_manager, stable_key, &piece_count);
+    if (!entry || !piece || piece_count != 1U ||
+        (flags & ~2ULL) != 0ULL) {
+        return result;
+    }
+    __try {
+        ((CdfStorePieceFn)(
+            executable + CDF_FURNITURE_STORE_PIECE_RVA))(piece);
+        result.pending_component = piece;
+        result.success = (uint8_t)(
+            cdf_delete_queued(piece) &&
+            cdf_copy_string(
+                (const CdfNarrowString*)((uint8_t*)entry +
+                    CDF_ENTRY_ROOM_OFFSET),
+                room,
+                sizeof(room)) &&
+            room[0] == '\0' &&
+            cdf_readable(
+                piece, CDF_PIECE_ENTRY_OFFSET + sizeof(void*)) &&
+            *(void**)((uint8_t*)piece + CDF_PIECE_ENTRY_OFFSET) == NULL &&
+            cdf_find_entry(stable_key, expected_item, NULL) == entry);
     }
     __except (cdf_capture_exception(GetExceptionInformation(), &result)) {
         result.success = 0U;
