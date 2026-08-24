@@ -9,10 +9,14 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <map>
 #include <mutex>
+#include <new>
 #include <regex>
 #include <sstream>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -37,6 +41,19 @@ bool g_catalog_attempted{};
 std::string g_catalog_error;
 bool g_config_loaded{};
 int g_hotkey{VK_F8};
+
+struct BatchState {
+    std::vector<cdf::CombineCandidate> candidates;
+    std::size_t next_index{};
+};
+
+BatchState g_batch;
+
+struct TransientMessage {
+    std::wstring text;
+    UINT icon{};
+    DWORD timeout_ms{};
+};
 
 std::filesystem::path ModulePath() {
     std::wstring buffer(32768, L'\0');
@@ -98,50 +115,80 @@ void Log(std::string_view message) {
            << " " << message << '\n';
 }
 
-std::string Number(double value) {
-    std::ostringstream output;
-    if (value >= 0.0) {
-        output << '+';
+DWORD WINAPI TransientMessageThread(void* parameter) {
+    auto* message = static_cast<TransientMessage*>(parameter);
+    using MessageBoxTimeoutFn = int (WINAPI*)(
+        HWND, LPCWSTR, LPCWSTR, UINT, WORD, DWORD);
+    const auto user32 = GetModuleHandleW(L"user32.dll");
+    const auto show = user32
+        ? reinterpret_cast<MessageBoxTimeoutFn>(
+              GetProcAddress(user32, "MessageBoxTimeoutW"))
+        : nullptr;
+    if (show) {
+        show(
+            nullptr,
+            message->text.c_str(),
+            L"批量合并重复家具",
+            MB_OK | message->icon | MB_TOPMOST,
+            0,
+            message->timeout_ms);
+    } else {
+        MessageBeep(message->icon);
     }
-    output << std::fixed << std::setprecision(2) << value;
-    auto text = output.str();
-    while (text.size() > 1 && text.back() == '0') {
-        text.pop_back();
-    }
-    if (!text.empty() && text.back() == '.') {
-        text.pop_back();
-    }
-    return text;
+    delete message;
+    return 0;
 }
 
-void AppendAttribute(
-    std::ostringstream& output,
-    std::string_view name,
-    double normal,
-    double rare) {
-    if (normal == 0.0 && rare == 0.0) {
+void ShowTransient(
+    std::string text,
+    UINT icon = MB_ICONINFORMATION,
+    DWORD timeout_ms = 2500U) {
+    auto* message = new (std::nothrow) TransientMessage{
+        Wide(text), icon, timeout_ms};
+    if (!message) {
         return;
     }
-    output << name << ": " << Number(normal)
-           << " x2 = " << Number(rare) << '\n';
+    const auto thread = CreateThread(
+        nullptr, 0, TransientMessageThread, message, 0, nullptr);
+    if (!thread) {
+        delete message;
+        return;
+    }
+    CloseHandle(thread);
 }
 
-std::string Preview(
-    const cdf::CombineCandidate& candidate,
-    const cdf::FurnitureDefinition& definition) {
-    const auto rare = definition.attributes.Rare();
+std::string BatchPreview(
+    const std::vector<cdf::CombineCandidate>& candidates) {
+    std::map<std::string, std::size_t> pair_counts;
+    for (const auto& candidate : candidates) {
+        ++pair_counts[candidate.item_id];
+    }
+
     std::ostringstream output;
-    output << definition.display_name << " x2\n"
-           << "-> Rare " << definition.display_name << " x1\n\n"
-           << "item_id: " << candidate.item_id << '\n';
-    AppendAttribute(output, "Comfort", definition.attributes.comfort, rare.comfort);
-    AppendAttribute(output, "Stimulation", definition.attributes.stimulation, rare.stimulation);
-    AppendAttribute(output, "Health", definition.attributes.health, rare.health);
-    AppendAttribute(output, "Evolution", definition.attributes.evolution, rare.evolution);
-    AppendAttribute(output, "Appeal", definition.attributes.appeal, rare.appeal);
-    output << "\nRare also doubles negative attributes.\n"
-           << "Only one duplicate group will be combined.\n\n"
-           << "Confirm?";
+    output << "发现 " << candidates.size() << " 组可合并的普通家具。\n\n"
+           << "确认后将消耗 " << candidates.size() << " 件普通家具，\n"
+           << "并保留 " << candidates.size() << " 件原生 Rare 家具。\n\n";
+
+    std::size_t shown{};
+    constexpr std::size_t kMaxShownTypes = 12;
+    for (const auto& [item_id, count] : pair_counts) {
+        if (shown == kMaxShownTypes) {
+            output << "……另有 " << pair_counts.size() - shown
+                   << " 种家具\n";
+            break;
+        }
+        const auto definition = g_catalog.find(item_id);
+        output << "- "
+               << (definition != g_catalog.end()
+                       ? definition->second.display_name
+                       : item_id)
+               << " × " << count << " 组\n";
+        ++shown;
+    }
+
+    output << "\n合并会分散到连续游戏帧执行，完成提示会自动消失。\n"
+           << "Rare 也会使负面属性翻倍。\n\n"
+           << "开始批量合并？";
     return output.str();
 }
 
@@ -185,36 +232,96 @@ void EnsureConfig() {
     Log("config hotkey=F" + std::to_string(function_key));
 }
 
-std::string StatusName(cdf::ExecuteStatus status) {
-    switch (status) {
-    case cdf::ExecuteStatus::Success:
-        return "success";
-    case cdf::ExecuteStatus::PreconditionFailed:
-        return "precondition_failed";
-    case cdf::ExecuteStatus::RareConversionFailed:
-        return "rare_conversion_failed";
-    case cdf::ExecuteStatus::ConsumeFailed:
-        return "consume_failed";
-    case cdf::ExecuteStatus::VerificationFailed:
-        return "verification_failed";
+void ClearBatch() {
+    g_batch = {};
+    g_busy = false;
+}
+
+void StopBatch(
+    std::string_view stage,
+    const cdf::CombineCandidate& candidate,
+    const cdf::NativeFailure& failure,
+    bool rollback_attempted = false,
+    bool rollback_succeeded = false) {
+    std::ostringstream message;
+    message << "batch stopped stage=" << stage
+            << " completed=" << g_batch.next_index
+            << " planned=" << g_batch.candidates.size()
+            << " item=" << candidate.item_id
+            << " keep_key=" << candidate.keep_key
+            << " consume_key=" << candidate.consume_key
+            << " rollback_attempted=" << rollback_attempted
+            << " rollback_succeeded=" << rollback_succeeded
+            << " seh=0x" << std::hex << failure.seh_code
+            << " exception_rva=0x" << failure.exception_rva;
+    Log(message.str());
+    ShowTransient(
+        "批量合并已停止。已完成 " +
+            std::to_string(g_batch.next_index) + " / " +
+            std::to_string(g_batch.candidates.size()) +
+            " 组。详情请查看 MOD 日志。",
+        MB_ICONERROR,
+        4000U);
+    ClearBatch();
+}
+
+void ProcessBatch(void* scene_manager) {
+    if (!g_busy || g_batch.next_index >= g_batch.candidates.size()) {
+        return;
     }
-    return "unknown";
+
+    const auto candidate = g_batch.candidates[g_batch.next_index];
+    cdf::NativeTransactionPort port(scene_manager);
+    if (!port.SetRare(
+            candidate.keep_key,
+            candidate.item_id,
+            candidate.keep_flags)) {
+        StopBatch("set_rare", candidate, port.LastFailure());
+        return;
+    }
+
+    if (!port.Consume(candidate.consume_key, candidate.item_id)) {
+        const auto failure = port.LastFailure();
+        const bool rollback =
+            port.ClearRare(candidate.keep_key, candidate.item_id);
+        StopBatch("consume", candidate, failure, true, rollback);
+        return;
+    }
+
+    ++g_batch.next_index;
+    {
+        std::ostringstream message;
+        message << "batch pair complete index=" << g_batch.next_index
+                << '/' << g_batch.candidates.size()
+                << " item=" << candidate.item_id
+                << " keep_key=" << candidate.keep_key
+                << " consume_key=" << candidate.consume_key;
+        Log(message.str());
+    }
+
+    if (g_batch.next_index == g_batch.candidates.size()) {
+        const auto completed = g_batch.next_index;
+        Log("batch complete pairs=" + std::to_string(completed));
+        ShowTransient(
+            "批量合并完成：已合并 " + std::to_string(completed) +
+            " 组重复普通家具。",
+            MB_ICONINFORMATION,
+            2500U);
+        ClearBatch();
+    }
 }
 
 void HandleCombine(void* scene_manager) {
     if (g_busy.exchange(true)) {
         return;
     }
-    struct BusyReset {
-        ~BusyReset() { g_busy = false; }
-    } reset;
 
     if (!EnsureCatalog()) {
-        MessageBoxW(
-            nullptr,
-            Wide("Furniture data could not be loaded:\n" + g_catalog_error).c_str(),
-            L"Combine Duplicate Furniture",
-            MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+        ShowTransient(
+            "家具数据读取失败：\n" + g_catalog_error,
+            MB_ICONERROR,
+            4000U);
+        ClearBatch();
         return;
     }
 
@@ -224,7 +331,7 @@ void HandleCombine(void* scene_manager) {
     for (const auto& item : snapshot.furniture) {
         rare_count += item.IsRare() ? 1U : 0U;
     }
-    const auto candidates = cdf::FindCandidates(snapshot, g_catalog);
+    auto candidates = cdf::FindCandidates(snapshot, g_catalog);
     {
         std::ostringstream message;
         message << "scan total=" << snapshot.furniture.size()
@@ -235,102 +342,66 @@ void HandleCombine(void* scene_manager) {
         Log(message.str());
     }
     if (!snapshot.complete || !port.SignaturesValid()) {
-        MessageBoxW(
-            nullptr,
-            L"The current game build or furniture state did not pass the native checks. No furniture was changed.",
-            L"Combine Duplicate Furniture",
-            MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+        ShowTransient(
+            "当前家具状态无法读取，未修改任何家具。",
+            MB_ICONERROR,
+            3500U);
+        ClearBatch();
         return;
     }
     if (candidates.empty()) {
-        MessageBoxW(
-            nullptr,
-            L"No pair of identical ordinary furniture can be combined.",
-            L"Combine Duplicate Furniture",
-            MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND);
+        ShowTransient("没有可合并的相同普通家具。", MB_ICONINFORMATION);
+        ClearBatch();
         return;
     }
 
-    const auto& candidate = candidates.front();
-    const auto definition = g_catalog.find(candidate.item_id);
-    if (definition == g_catalog.end()) {
-        return;
-    }
-    {
-        std::ostringstream message;
-        message << "preview item=" << candidate.item_id
-                << " keep_key=" << candidate.keep_key
-                << " consume_key=" << candidate.consume_key
-                << " normal_attributes="
-                << Number(definition->second.attributes.comfort) << ','
-                << Number(definition->second.attributes.stimulation) << ','
-                << Number(definition->second.attributes.health) << ','
-                << Number(definition->second.attributes.evolution) << ','
-                << Number(definition->second.attributes.appeal);
-        Log(message.str());
-    }
+    Log("batch preview pairs=" + std::to_string(candidates.size()));
     const auto choice = MessageBoxW(
         nullptr,
-        Wide(Preview(candidate, definition->second)).c_str(),
-        L"Combine Duplicate Furniture",
+        Wide(BatchPreview(candidates)).c_str(),
+        L"批量合并重复家具",
         MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_SETFOREGROUND);
     if (choice != IDYES) {
-        Log("confirmation cancelled item=" + candidate.item_id);
+        Log("batch confirmation cancelled pairs=" +
+            std::to_string(candidates.size()));
+        ClearBatch();
         return;
     }
 
-    const auto result = cdf::ExecuteCandidate(candidate, port);
-    const auto failure = port.LastFailure();
-    {
-        std::ostringstream message;
-        const auto rare = definition->second.attributes.Rare();
-        message << "execute status=" << StatusName(result.status)
-                << " stage=" << result.stage
-                << " item=" << candidate.item_id
-                << " keep_key=" << candidate.keep_key
-                << " consume_key=" << candidate.consume_key
-                << " before=" << result.before_count
-                << " after=" << result.after_count
-                << " rare_target="
-                << Number(rare.comfort) << ','
-                << Number(rare.stimulation) << ','
-                << Number(rare.health) << ','
-                << Number(rare.evolution) << ','
-                << Number(rare.appeal)
-                << " rollback_attempted=" << result.rare_rollback_attempted
-                << " rollback_succeeded=" << result.rare_rollback_succeeded
-                << " seh=0x" << std::hex << failure.seh_code
-                << " exception_rva=0x" << failure.exception_rva;
-        Log(message.str());
-    }
-
-    if (result.status == cdf::ExecuteStatus::Success) {
-        MessageBoxW(
-            nullptr,
-            Wide("Combined one duplicate pair successfully:\n" +
-                 definition->second.display_name +
-                 "\n\nThe kept instance now has the native Rare flag.").c_str(),
-            L"Combine Duplicate Furniture",
-            MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND);
-    } else {
-        MessageBoxW(
-            nullptr,
-            Wide("Combine failed at stage: " + result.stage +
-                 "\nNo further group was processed. Check the independent mod log.").c_str(),
-            L"Combine Duplicate Furniture",
-            MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
-    }
+    g_batch.candidates = std::move(candidates);
+    g_batch.next_index = 0;
+    Log("batch started pairs=" +
+        std::to_string(g_batch.candidates.size()));
 }
 
 void __fastcall SceneReadyHook(void* scene_manager) {
     if (g_next_scene_ready) {
         g_next_scene_ready(scene_manager);
     }
-    if (!g_enabled || !scene_manager ||
-        !cdf::FurnitureModeActive(scene_manager)) {
+    if (!g_enabled || !scene_manager) {
         return;
     }
     EnsureConfig();
+    EnsureCatalog();
+    const bool furniture_mode = cdf::FurnitureModeActive(scene_manager);
+    if (g_busy) {
+        if (!furniture_mode) {
+            Log("batch cancelled because furniture mode closed completed=" +
+                std::to_string(g_batch.next_index) +
+                " planned=" + std::to_string(g_batch.candidates.size()));
+            ShowTransient(
+                "已退出家具模式，批量合并停止。",
+                MB_ICONWARNING,
+                3000U);
+            ClearBatch();
+            return;
+        }
+        ProcessBatch(scene_manager);
+        return;
+    }
+    if (!furniture_mode) {
+        return;
+    }
     if ((GetAsyncKeyState(g_hotkey) & 1) != 0) {
         HandleCombine(scene_manager);
     }

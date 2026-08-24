@@ -135,6 +135,16 @@ void SameOrdinaryCreatesCandidate() {
     CHECK(candidates[0].consume_key == 2);
 }
 
+void MultipleOrdinaryCreatesAllPairs() {
+    const auto candidates = cdf::FindCandidates(
+        Snapshot({Item(5), Item(1), Item(4), Item(2), Item(3)}), Catalog());
+    CHECK(candidates.size() == 2);
+    CHECK(candidates[0].keep_key == 1);
+    CHECK(candidates[0].consume_key == 2);
+    CHECK(candidates[1].keep_key == 3);
+    CHECK(candidates[1].consume_key == 4);
+}
+
 void DifferentItemsDoNotCombine() {
     CHECK(cdf::FindCandidates(
         Snapshot({Item(1, "chair"), Item(2, "table")}),
@@ -259,6 +269,7 @@ void DuplicateStableKeysAreRejected() {
 int main() {
     const std::vector<std::pair<const char*, std::function<void()>>> tests{
         {"same ordinary", SameOrdinaryCreatesCandidate},
+        {"all ordinary pairs", MultipleOrdinaryCreatesAllPairs},
         {"different item", DifferentItemsDoNotCombine},
         {"ordinary rare", OrdinaryAndRareDoNotCombine},
         {"two rare", TwoRareDoNotCombine},
@@ -283,6 +294,6 @@ int main() {
         std::cerr << g_failures << " focused checks failed\n";
         return EXIT_FAILURE;
     }
-    std::cout << "All 15 focused checks passed\n";
+    std::cout << "All 16 focused checks passed\n";
     return EXIT_SUCCESS;
 }

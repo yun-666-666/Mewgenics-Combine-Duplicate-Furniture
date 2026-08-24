@@ -52,18 +52,17 @@ std::vector<CombineCandidate> FindCandidates(
         std::ranges::sort(instances, [](const auto* left, const auto* right) {
             return left->stable_key < right->stable_key;
         });
-        if (instances.size() < 2) {
-            continue;
+        for (std::size_t index = 0; index + 1 < instances.size(); index += 2) {
+            const auto* keep = instances[index];
+            const auto* consume = instances[index + 1];
+            result.push_back({
+                item_id,
+                keep->stable_key,
+                consume->stable_key,
+                keep->placement_flags,
+                consume->placement_flags,
+                snapshot.furniture.size()});
         }
-        const auto* keep = instances[0];
-        const auto* consume = instances[1];
-        result.push_back({
-            item_id,
-            keep->stable_key,
-            consume->stable_key,
-            keep->placement_flags,
-            consume->placement_flags,
-            snapshot.furniture.size()});
     }
     return result;
 }
