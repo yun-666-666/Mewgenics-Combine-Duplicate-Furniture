@@ -35,6 +35,8 @@ SceneReadyUpdateFn g_next_scene_ready{};
 MewLogFn g_mew_log{};
 std::atomic<bool> g_enabled{false};
 std::atomic<bool> g_busy{false};
+bool g_refresh_after_furniture_reentry{};
+bool g_furniture_exit_seen{};
 std::mutex g_log_mutex;
 cdf::FurnitureCatalog g_catalog;
 bool g_catalog_attempted{};
@@ -46,7 +48,6 @@ struct BatchState {
     std::vector<cdf::CombineCandidate> candidates;
     std::size_t next_index{};
     std::vector<void*> pending_components;
-    void* furniture_ui{};
 };
 
 BatchState g_batch;
@@ -294,6 +295,8 @@ void FinishBatch() {
         candidate.promote_to_rare ? ++ordinary_pairs : ++rare_pairs;
     }
     Log("batch complete pairs=" + std::to_string(completed));
+    g_refresh_after_furniture_reentry = true;
+    g_furniture_exit_seen = false;
     ShowTransient(
         "批量合并完成：已合并 " + std::to_string(completed) +
         " 组重复家具（普通 " + std::to_string(ordinary_pairs) +
@@ -329,10 +332,6 @@ void ProcessBatch(void* scene_manager) {
 
     const auto candidate = g_batch.candidates[g_batch.next_index];
     cdf::NativeTransactionPort port(scene_manager);
-    if (!cdf::RequestFurnitureUiRefresh(g_batch.furniture_ui)) {
-        StopBatch("request_ui_refresh", candidate, {});
-        return;
-    }
     if (candidate.promote_to_rare && !port.SetRare(
             candidate.keep_key,
             candidate.item_id,
@@ -400,16 +399,6 @@ void HandleCombine(void* scene_manager) {
             "家具数据读取失败：\n" + g_catalog_error,
             MB_ICONERROR,
             4000U);
-        ClearBatch();
-        return;
-    }
-
-    g_batch.furniture_ui = cdf::FindFurnitureUi(scene_manager);
-    if (!g_batch.furniture_ui) {
-        ShowTransient(
-            "当前家具界面无法读取，未修改任何家具。",
-            MB_ICONERROR,
-            3500U);
         ClearBatch();
         return;
     }
@@ -532,7 +521,23 @@ void __fastcall SceneReadyHook(void* scene_manager) {
         ProcessBatch(scene_manager);
         return;
     }
-    if (!cdf::FurnitureModeActive(scene_manager)) {
+    const bool furniture_mode_active =
+        cdf::FurnitureModeActive(scene_manager);
+    if (g_refresh_after_furniture_reentry) {
+        if (!furniture_mode_active) {
+            g_furniture_exit_seen = true;
+        } else if (g_furniture_exit_seen) {
+            const auto furniture_ui = cdf::FindFurnitureUi(scene_manager);
+            if (furniture_ui &&
+                cdf::RequestFurnitureUiRefresh(furniture_ui)) {
+                Log("furniture UI refresh requested after mode re-entry");
+                g_refresh_after_furniture_reentry = false;
+                g_furniture_exit_seen = false;
+                return;
+            }
+        }
+    }
+    if (!furniture_mode_active) {
         return;
     }
     if ((GetAsyncKeyState(g_hotkey) & 1) != 0) {
