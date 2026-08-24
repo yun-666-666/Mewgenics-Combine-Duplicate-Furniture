@@ -65,6 +65,7 @@ bool NativeTransactionPort::Consume(
     const auto result = cdf_native_consume(
         scene_manager_, stable_key, item_id.c_str());
     last_failure_ = {result.seh_code, result.exception_rva};
+    last_consumed_component_ = result.pending_component;
     return result.success != 0;
 }
 
@@ -76,8 +77,18 @@ NativeFailure NativeTransactionPort::LastFailure() const noexcept {
     return last_failure_;
 }
 
+void* NativeTransactionPort::LastConsumedComponent() const noexcept {
+    return last_consumed_component_;
+}
+
 bool FurnitureModeActive(void* scene_manager) noexcept {
     return cdf_native_furniture_mode_active(scene_manager) != 0;
+}
+
+bool SceneContainsComponent(
+    void* scene_manager,
+    const void* component) noexcept {
+    return cdf_native_scene_contains_component(scene_manager, component) != 0;
 }
 
 }  // namespace cdf

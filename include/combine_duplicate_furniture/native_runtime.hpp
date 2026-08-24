@@ -30,13 +30,18 @@ public:
 
     [[nodiscard]] bool SignaturesValid() const noexcept;
     [[nodiscard]] NativeFailure LastFailure() const noexcept;
+    [[nodiscard]] void* LastConsumedComponent() const noexcept;
 
 private:
     void* scene_manager_{};
     bool signatures_valid_{};
     NativeFailure last_failure_{};
+    void* last_consumed_component_{};
 };
 
 [[nodiscard]] bool FurnitureModeActive(void* scene_manager) noexcept;
+[[nodiscard]] bool SceneContainsComponent(
+    void* scene_manager,
+    const void* component) noexcept;
 
 }  // namespace cdf

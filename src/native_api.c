@@ -364,6 +364,24 @@ int cdf_native_furniture_mode_active(void* scene_manager) {
     return 0;
 }
 
+int cdf_native_scene_contains_component(
+    void* scene_manager,
+    const void* component) {
+    void** components;
+    uint32_t count;
+    uint32_t index;
+    if (!component ||
+        !cdf_scene_components(scene_manager, &components, &count)) {
+        return 0;
+    }
+    for (index = 0; index < count; ++index) {
+        if (components[index] == component) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 CdfNativeScanResult cdf_native_scan(
     void* scene_manager,
     CdfNativeFurniture* output,
@@ -479,6 +497,7 @@ CdfNativeMutationResult cdf_native_consume(
     }
     __try {
         if (piece_count == 1U && piece) {
+            result.pending_component = piece;
             ((CdfTrashPieceFn)(executable + CDF_FURNITURE_TRASH_RVA))(piece);
         } else {
             ((CdfStorageDeleteFn)(

@@ -45,6 +45,7 @@ int g_hotkey{VK_F8};
 struct BatchState {
     std::vector<cdf::CombineCandidate> candidates;
     std::size_t next_index{};
+    void* pending_component{};
 };
 
 BatchState g_batch;
@@ -265,8 +266,36 @@ void StopBatch(
     ClearBatch();
 }
 
+void FinishBatch() {
+    const auto completed = g_batch.next_index;
+    Log("batch complete pairs=" + std::to_string(completed));
+    ShowTransient(
+        "批量合并完成：已合并 " + std::to_string(completed) +
+        " 组重复普通家具。",
+        MB_ICONINFORMATION,
+        2500U);
+    ClearBatch();
+}
+
 void ProcessBatch(void* scene_manager) {
-    if (!g_busy || g_batch.next_index >= g_batch.candidates.size()) {
+    if (!g_busy) {
+        return;
+    }
+
+    if (g_batch.pending_component) {
+        if (cdf::SceneContainsComponent(
+                scene_manager, g_batch.pending_component)) {
+            return;
+        }
+        g_batch.pending_component = nullptr;
+        if (g_batch.next_index == g_batch.candidates.size()) {
+            FinishBatch();
+            return;
+        }
+    }
+
+    if (g_batch.next_index >= g_batch.candidates.size()) {
+        FinishBatch();
         return;
     }
 
@@ -288,6 +317,7 @@ void ProcessBatch(void* scene_manager) {
         return;
     }
 
+    g_batch.pending_component = port.LastConsumedComponent();
     ++g_batch.next_index;
     {
         std::ostringstream message;
@@ -295,19 +325,15 @@ void ProcessBatch(void* scene_manager) {
                 << '/' << g_batch.candidates.size()
                 << " item=" << candidate.item_id
                 << " keep_key=" << candidate.keep_key
-                << " consume_key=" << candidate.consume_key;
+                << " consume_key=" << candidate.consume_key
+                << " scene_delete="
+                << (g_batch.pending_component != nullptr);
         Log(message.str());
     }
 
-    if (g_batch.next_index == g_batch.candidates.size()) {
-        const auto completed = g_batch.next_index;
-        Log("batch complete pairs=" + std::to_string(completed));
-        ShowTransient(
-            "批量合并完成：已合并 " + std::to_string(completed) +
-            " 组重复普通家具。",
-            MB_ICONINFORMATION,
-            2500U);
-        ClearBatch();
+    if (g_batch.next_index == g_batch.candidates.size() &&
+        !g_batch.pending_component) {
+        FinishBatch();
     }
 }
 
