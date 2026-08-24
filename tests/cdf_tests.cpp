@@ -44,8 +44,18 @@ FurnitureInstance Item(
     std::string id = "chair",
     std::uint64_t flags = 0,
     bool pending = false,
-    std::uint32_t matches = 0) {
-    return {key, std::move(id), flags, pending, matches};
+    std::uint32_t matches = 0,
+    std::string room = {}) {
+    if (matches == 1 && room.empty()) {
+        room = "TestRoom";
+    }
+    return {
+        key,
+        std::move(id),
+        std::move(room),
+        flags,
+        pending,
+        matches};
 }
 
 ScanSnapshot Snapshot(std::vector<FurnitureInstance> items) {
@@ -162,6 +172,38 @@ void TwoPlacedRequireStoreConfirmation() {
         Catalog());
     CHECK(candidates.size() == 1);
     CHECK(candidates[0].consume_placed);
+}
+
+void UnavailablePlacedIsNeverConsumed() {
+    const auto candidates = cdf::FindCandidates(
+        Snapshot({
+            Item(8, "chair", 0, false, 0, "Floor2_Large"),
+            Item(3, "chair", 0, false, 1)}),
+        Catalog());
+    CHECK(candidates.size() == 1);
+    CHECK(candidates[0].keep_key == 8);
+    CHECK(candidates[0].consume_key == 3);
+    CHECK(candidates[0].consume_placed);
+}
+
+void TwoUnavailablePlacedAreSkipped() {
+    CHECK(cdf::FindCandidates(
+        Snapshot({
+            Item(8, "chair", 0, false, 0, "Floor2_Large"),
+            Item(3, "chair", 0, false, 0, "Floor2_Large")}),
+        Catalog()).empty());
+}
+
+void StoredConsumeStillHasPriority() {
+    const auto candidates = cdf::FindCandidates(
+        Snapshot({
+            Item(8, "chair", 0, false, 0, "Floor2_Large"),
+            Item(5, "chair", 0, false, 1),
+            Item(3)}),
+        Catalog());
+    CHECK(candidates.size() == 1);
+    CHECK(candidates[0].consume_key == 3);
+    CHECK(!candidates[0].consume_placed);
 }
 
 void DifferentItemsDoNotCombine() {
@@ -291,6 +333,9 @@ int main() {
         {"all ordinary pairs", MultipleOrdinaryCreatesAllPairs},
         {"stored material preferred", StoredMaterialIsPreferred},
         {"placed material confirmation", TwoPlacedRequireStoreConfirmation},
+        {"unavailable placed kept", UnavailablePlacedIsNeverConsumed},
+        {"two unavailable placed skipped", TwoUnavailablePlacedAreSkipped},
+        {"stored consume priority", StoredConsumeStillHasPriority},
         {"different item", DifferentItemsDoNotCombine},
         {"ordinary rare", OrdinaryAndRareDoNotCombine},
         {"two rare", TwoRareDoNotCombine},
@@ -315,6 +360,6 @@ int main() {
         std::cerr << g_failures << " focused checks failed\n";
         return EXIT_FAILURE;
     }
-    std::cout << "All 18 focused checks passed\n";
+    std::cout << "All 21 focused checks passed\n";
     return EXIT_SUCCESS;
 }

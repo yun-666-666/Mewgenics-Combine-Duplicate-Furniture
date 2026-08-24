@@ -49,17 +49,24 @@ std::vector<CombineCandidate> FindCandidates(
     }
 
     for (auto& [item_id, instances] : by_item) {
-        std::vector<const FurnitureInstance*> placed;
         std::vector<const FurnitureInstance*> stored;
+        std::vector<const FurnitureInstance*> placed_live;
+        std::vector<const FurnitureInstance*> placed_unavailable;
         for (const auto* instance : instances) {
-            (instance->runtime_match_count == 1 ? placed : stored)
-                .push_back(instance);
+            if (instance->room_id.empty()) {
+                stored.push_back(instance);
+            } else if (instance->runtime_match_count == 1) {
+                placed_live.push_back(instance);
+            } else {
+                placed_unavailable.push_back(instance);
+            }
         }
         const auto by_key = [](const auto* left, const auto* right) {
             return left->stable_key < right->stable_key;
         };
-        std::ranges::sort(placed, by_key);
         std::ranges::sort(stored, by_key);
+        std::ranges::sort(placed_live, by_key);
+        std::ranges::sort(placed_unavailable, by_key);
 
         const auto add_pair = [&](const auto* keep, const auto* consume) {
             result.push_back({
@@ -69,22 +76,46 @@ std::vector<CombineCandidate> FindCandidates(
                 keep->placement_flags,
                 consume->placement_flags,
                 snapshot.furniture.size(),
-                consume->runtime_match_count == 1});
+                !consume->room_id.empty()});
         };
 
-        const auto mixed = std::min(placed.size(), stored.size());
+        std::vector<const FurnitureInstance*> placed_keeps;
+        placed_keeps.reserve(
+            placed_unavailable.size() + placed_live.size());
+        placed_keeps.insert(
+            placed_keeps.end(),
+            placed_unavailable.begin(),
+            placed_unavailable.end());
+        placed_keeps.insert(
+            placed_keeps.end(), placed_live.begin(), placed_live.end());
+
+        const auto mixed = std::min(placed_keeps.size(), stored.size());
         for (std::size_t index = 0; index < mixed; ++index) {
-            add_pair(placed[index], stored[index]);
+            add_pair(placed_keeps[index], stored[index]);
         }
         for (std::size_t index = mixed;
              index + 1 < stored.size();
              index += 2) {
             add_pair(stored[index], stored[index + 1]);
         }
-        for (std::size_t index = mixed;
-             index + 1 < placed.size();
+
+        const auto unavailable_used =
+            std::min(mixed, placed_unavailable.size());
+        const auto live_used = mixed - unavailable_used;
+        const auto remaining_unavailable =
+            placed_unavailable.size() - unavailable_used;
+        const auto remaining_live = placed_live.size() - live_used;
+        const auto unavailable_live =
+            std::min(remaining_unavailable, remaining_live);
+        for (std::size_t index = 0; index < unavailable_live; ++index) {
+            add_pair(
+                placed_unavailable[unavailable_used + index],
+                placed_live[live_used + index]);
+        }
+        for (std::size_t index = live_used + unavailable_live;
+             index + 1 < placed_live.size();
              index += 2) {
-            add_pair(placed[index], placed[index + 1]);
+            add_pair(placed_live[index], placed_live[index + 1]);
         }
     }
     return result;

@@ -65,6 +65,7 @@ ScanSnapshot NativeTransactionPort::Scan() {
         result.furniture.push_back({
             instance.stable_key,
             instance.item_id,
+            instance.room_id,
             instance.placement_flags,
             instance.delete_pending != 0,
             instance.runtime_match_count});

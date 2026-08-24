@@ -46,7 +46,6 @@ struct BatchState {
     std::vector<cdf::CombineCandidate> candidates;
     std::size_t next_index{};
     void* pending_component{};
-    bool placed_store_approved{};
     bool material_stored{};
 };
 
@@ -286,19 +285,6 @@ void FinishBatch() {
     ClearBatch();
 }
 
-void CancelBatchForPlacedFurniture() {
-    Log("batch cancelled at placed-furniture confirmation completed=" +
-        std::to_string(g_batch.next_index) +
-        " planned=" + std::to_string(g_batch.candidates.size()));
-    ShowTransient(
-        "已取消房间家具合并。本批次已完成 " +
-            std::to_string(g_batch.next_index) + " / " +
-            std::to_string(g_batch.candidates.size()) + " 组。",
-        MB_ICONINFORMATION,
-        3000U);
-    ClearBatch();
-}
-
 void ProcessBatch(void* scene_manager) {
     if (!g_busy) {
         return;
@@ -326,40 +312,8 @@ void ProcessBatch(void* scene_manager) {
     const auto candidate = g_batch.candidates[g_batch.next_index];
     cdf::NativeTransactionPort port(scene_manager);
     if (candidate.consume_placed && !g_batch.material_stored) {
-        if (!g_batch.placed_store_approved) {
-            std::size_t remaining_placed{};
-            for (std::size_t index = g_batch.next_index;
-                 index < g_batch.candidates.size();
-                 ++index) {
-                remaining_placed +=
-                    g_batch.candidates[index].consume_placed ? 1U : 0U;
-            }
-            const auto definition = g_catalog.find(candidate.item_id);
-            const auto name = definition != g_catalog.end()
-                ? definition->second.display_name
-                : candidate.item_id;
-            const auto choice = MessageBoxW(
-                nullptr,
-                Wide(
-                    "接下来有 " + std::to_string(remaining_placed) +
-                    " 组材料家具位于房间中。\n\n"
-                    "将先把这些家具逐件收回家具栏，再执行合并。\n"
-                    "本批次后续房间家具不再重复提示。\n\n"
-                    "当前家具：" + name + "\n\n继续？").c_str(),
-                L"确认收回房间家具",
-                MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 |
-                    MB_SETFOREGROUND);
-            if (choice != IDYES) {
-                CancelBatchForPlacedFurniture();
-                return;
-            }
-            g_batch.placed_store_approved = true;
-            Log("placed furniture store approved remaining=" +
-                std::to_string(remaining_placed));
-        }
-
-        const bool stored =
-            port.Store(candidate.consume_key, candidate.item_id);
+        const bool stored = port.Store(
+            candidate.consume_key, candidate.item_id);
         Log("room furniture store probe item=" + candidate.item_id +
             " consume_key=" + std::to_string(candidate.consume_key) +
             " success=" + std::to_string(stored) + " " +
@@ -463,6 +417,31 @@ void HandleCombine(void* scene_manager) {
     if (choice != IDYES) {
         Log("batch confirmation cancelled pairs=" +
             std::to_string(candidates.size()));
+        ClearBatch();
+        return;
+    }
+
+    const auto preview_pairs = candidates.size();
+    const auto refreshed_snapshot = port.Scan();
+    candidates = cdf::FindCandidates(refreshed_snapshot, g_catalog);
+    Log("batch refreshed preview_pairs=" +
+        std::to_string(preview_pairs) + " refreshed_pairs=" +
+        std::to_string(candidates.size()) + " total=" +
+        std::to_string(refreshed_snapshot.furniture.size()) +
+        " complete=" + std::to_string(refreshed_snapshot.complete));
+    if (!refreshed_snapshot.complete || !port.SignaturesValid()) {
+        ShowTransient(
+            "确认后家具状态无法重新读取，未修改任何家具。",
+            MB_ICONERROR,
+            3500U);
+        ClearBatch();
+        return;
+    }
+    if (candidates.empty()) {
+        ShowTransient(
+            "确认后家具状态已变化，目前没有可合并的家具。",
+            MB_ICONINFORMATION,
+            3000U);
         ClearBatch();
         return;
     }

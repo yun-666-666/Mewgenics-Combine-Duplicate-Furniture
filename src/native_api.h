@@ -36,6 +36,7 @@ typedef struct CdfNativeFurniture {
     uint32_t runtime_match_count;
     uint8_t delete_pending;
     char item_id[CDF_NATIVE_TEXT_CAPACITY];
+    char room_id[CDF_NATIVE_TEXT_CAPACITY];
 } CdfNativeFurniture;
 
 typedef struct CdfNativeScanResult {

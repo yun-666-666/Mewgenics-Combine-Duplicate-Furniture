@@ -35,6 +35,7 @@ using FurnitureCatalog =
 struct FurnitureInstance {
     std::uint64_t stable_key{};
     std::string item_id;
+    std::string room_id;
     std::uint64_t placement_flags{};
     bool delete_pending{};
     std::uint32_t runtime_match_count{};

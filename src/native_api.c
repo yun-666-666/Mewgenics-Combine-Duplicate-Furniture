@@ -428,7 +428,12 @@ CdfNativeScanResult cdf_native_scan(
                 (const CdfNarrowString*)((uint8_t*)entry +
                     CDF_ENTRY_ITEM_OFFSET),
                 current.item_id,
-                sizeof(current.item_id))) {
+                sizeof(current.item_id)) ||
+            !cdf_copy_string(
+                (const CdfNarrowString*)((uint8_t*)entry +
+                    CDF_ENTRY_ROOM_OFFSET),
+                current.room_id,
+                sizeof(current.room_id))) {
             result.complete = 0U;
             continue;
         }
