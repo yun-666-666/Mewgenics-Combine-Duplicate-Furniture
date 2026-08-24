@@ -6,8 +6,9 @@ Independent Windows x64 DLL mod for the current local Mewgenics build.
 - The mod scans current furniture records and builds every deterministic pair of identical ordinary furniture.
 - It shows one batch summary and asks for confirmation once.
 - On confirmation it processes one pair per game frame, sets each kept instance's native `0x2` Rare flag, and consumes each duplicate through the game's native deletion path.
-- Stored duplicates are consumed directly. Room furniture is identified from its native room field, recalled to the furniture inventory, and then consumed when its live room component is available.
+- Stored duplicates are consumed directly. Room furniture is identified from its native room field and all room materials are queued for native recall in the confirmation frame, before the modal focus change closes furniture mode.
 - After the batch confirmation closes, the mod scans and rebuilds the plan again so room-component changes during the dialog cannot leave stale work queued.
+- Special furniture that the game marks `can_be_rare false`, such as the Food Box, is never combined.
 - Completion and no-candidate notices close automatically and do not block the game thread.
 
 The independent log is written to `Mods/CombineDuplicateFurniture/logs/CombineDuplicateFurniture.log`.

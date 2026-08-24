@@ -45,8 +45,7 @@ int g_hotkey{VK_F8};
 struct BatchState {
     std::vector<cdf::CombineCandidate> candidates;
     std::size_t next_index{};
-    void* pending_component{};
-    bool material_stored{};
+    std::vector<void*> pending_components;
 };
 
 BatchState g_batch;
@@ -197,6 +196,7 @@ std::string BatchPreview(
 
     output << "\n合并会分散到连续游戏帧执行，完成提示会自动消失。\n"
            << "Rare 也会使负面属性翻倍。\n\n"
+           << "游戏标记为不可 Rare 的特殊家具（例如食物箱）不会参与。\n\n"
            << "开始批量合并？";
     return output.str();
 }
@@ -290,17 +290,17 @@ void ProcessBatch(void* scene_manager) {
         return;
     }
 
-    if (g_batch.pending_component) {
-        if (cdf::SceneContainsComponent(
-                scene_manager, g_batch.pending_component)) {
+    if (!g_batch.pending_components.empty()) {
+        std::erase_if(
+            g_batch.pending_components,
+            [scene_manager](const void* component) {
+                return !cdf::SceneContainsComponent(
+                    scene_manager, component);
+            });
+        if (!g_batch.pending_components.empty()) {
             return;
         }
-        g_batch.pending_component = nullptr;
-        Log("room furniture stored item=" +
-            g_batch.candidates[g_batch.next_index].item_id +
-            " consume_key=" +
-            std::to_string(
-                g_batch.candidates[g_batch.next_index].consume_key));
+        Log("room furniture pre-store complete");
         return;
     }
 
@@ -311,24 +311,6 @@ void ProcessBatch(void* scene_manager) {
 
     const auto candidate = g_batch.candidates[g_batch.next_index];
     cdf::NativeTransactionPort port(scene_manager);
-    if (candidate.consume_placed && !g_batch.material_stored) {
-        const bool stored = port.Store(
-            candidate.consume_key, candidate.item_id);
-        Log("room furniture store probe item=" + candidate.item_id +
-            " consume_key=" + std::to_string(candidate.consume_key) +
-            " success=" + std::to_string(stored) + " " +
-            port.LastStoreProbeSummary());
-        if (!stored) {
-            StopBatch("store", candidate, port.LastFailure());
-            return;
-        }
-        g_batch.pending_component = port.LastStoredComponent();
-        g_batch.material_stored = true;
-        Log("room furniture store queued item=" + candidate.item_id +
-            " consume_key=" + std::to_string(candidate.consume_key));
-        return;
-    }
-
     if (!port.SetRare(
             candidate.keep_key,
             candidate.item_id,
@@ -346,8 +328,6 @@ void ProcessBatch(void* scene_manager) {
     }
 
     ++g_batch.next_index;
-    const bool stored_from_room = g_batch.material_stored;
-    g_batch.material_stored = false;
     {
         std::ostringstream message;
         message << "batch pair complete index=" << g_batch.next_index
@@ -355,7 +335,7 @@ void ProcessBatch(void* scene_manager) {
                 << " item=" << candidate.item_id
                 << " keep_key=" << candidate.keep_key
                 << " consume_key=" << candidate.consume_key
-                << " stored_from_room=" << stored_from_room;
+                << " stored_from_room=" << candidate.consume_placed;
         Log(message.str());
     }
 
@@ -450,6 +430,30 @@ void HandleCombine(void* scene_manager) {
     g_batch.next_index = 0;
     Log("batch started pairs=" +
         std::to_string(g_batch.candidates.size()));
+
+    std::size_t room_materials{};
+    for (const auto& candidate : g_batch.candidates) {
+        if (!candidate.consume_placed) {
+            continue;
+        }
+        const bool stored = port.Store(
+            candidate.consume_key, candidate.item_id);
+        Log("room furniture pre-store probe item=" + candidate.item_id +
+            " consume_key=" + std::to_string(candidate.consume_key) +
+            " success=" + std::to_string(stored) + " " +
+            port.LastStoreProbeSummary());
+        if (!stored) {
+            StopBatch("pre_store", candidate, port.LastFailure());
+            return;
+        }
+        g_batch.pending_components.push_back(
+            port.LastStoredComponent());
+        ++room_materials;
+    }
+    if (room_materials != 0U) {
+        Log("room furniture pre-store queued count=" +
+            std::to_string(room_materials));
+    }
 }
 
 void __fastcall SceneReadyHook(void* scene_manager) {

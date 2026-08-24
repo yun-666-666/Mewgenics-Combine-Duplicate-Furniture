@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(CombineDuplicateFurniture VERSION 0.3.3 LANGUAGES C CXX)
+project(CombineDuplicateFurniture VERSION 0.3.4 LANGUAGES C CXX)
 
 if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "CombineDuplicateFurniture supports Windows x64 only.")
