@@ -4,6 +4,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -43,6 +44,27 @@ bool g_catalog_attempted{};
 std::string g_catalog_error;
 bool g_config_loaded{};
 int g_hotkey{VK_F8};
+
+enum class UiLanguage {
+    Chinese,
+    English,
+};
+
+UiLanguage g_language{UiLanguage::Chinese};
+
+bool EnglishUi() {
+    return g_language == UiLanguage::English;
+}
+
+const wchar_t* DialogTitle() {
+    return EnglishUi()
+        ? L"Combine Duplicate Furniture"
+        : L"批量合并重复家具";
+}
+
+std::string Localized(const char* chinese, const char* english) {
+    return EnglishUi() ? english : chinese;
+}
 
 struct BatchState {
     std::vector<cdf::CombineCandidate> candidates;
@@ -131,7 +153,7 @@ DWORD WINAPI TransientMessageThread(void* parameter) {
         show(
             nullptr,
             message->text.c_str(),
-            L"批量合并重复家具",
+            DialogTitle(),
             MB_OK | message->icon | MB_TOPMOST,
             0,
             message->timeout_ms);
@@ -173,19 +195,38 @@ std::string BatchPreview(
     }
 
     std::ostringstream output;
-    output << "发现 " << candidates.size() << " 组可合并的重复家具。\n\n";
-    if (ordinary_pairs != 0U) {
-        output << "- " << ordinary_pairs
-               << " 组普通同款：每组升级并保留 1 件原生 Rare。\n";
-    }
-    if (rare_pairs != 0U) {
-        output << "- " << rare_pairs
-               << " 组 Rare 同款：每组保留 1 件强化 Rare（基础数值 4 倍），清掉 1 件重复件。\n";
-    }
-    output << "合计将消耗 " << candidates.size() << " 件重复家具。\n";
-    if (placed_pairs != 0U) {
-        output << "其中 " << placed_pairs
-               << " 组需要先把材料家具从房间收回家具栏。\n";
+    if (EnglishUi()) {
+        output << "Found " << candidates.size()
+               << " duplicate furniture pairs that can be combined.\n\n";
+        if (ordinary_pairs != 0U) {
+            output << "- " << ordinary_pairs
+                   << " ordinary pairs: keep one native Rare item per pair.\n";
+        }
+        if (rare_pairs != 0U) {
+            output << "- " << rare_pairs
+                   << " Rare pairs: keep one enhanced Rare item with 4x base values per pair.\n";
+        }
+        output << "The batch will consume " << candidates.size()
+               << " duplicate items.\n";
+        if (placed_pairs != 0U) {
+            output << placed_pairs
+                   << " pairs require recalling the material item from a room first.\n";
+        }
+    } else {
+        output << "发现 " << candidates.size() << " 组可合并的重复家具。\n\n";
+        if (ordinary_pairs != 0U) {
+            output << "- " << ordinary_pairs
+                   << " 组普通同款：每组升级并保留 1 件原生 Rare。\n";
+        }
+        if (rare_pairs != 0U) {
+            output << "- " << rare_pairs
+                   << " 组 Rare 同款：每组保留 1 件强化 Rare（基础数值 4 倍），清掉 1 件重复件。\n";
+        }
+        output << "合计将消耗 " << candidates.size() << " 件重复家具。\n";
+        if (placed_pairs != 0U) {
+            output << "其中 " << placed_pairs
+                   << " 组需要先把材料家具从房间收回家具栏。\n";
+        }
     }
     output << '\n';
 
@@ -193,8 +234,13 @@ std::string BatchPreview(
     constexpr std::size_t kMaxShownTypes = 12;
     for (const auto& [item_id, count] : pair_counts) {
         if (shown == kMaxShownTypes) {
-            output << "……另有 " << pair_counts.size() - shown
-                   << " 种家具\n";
+            if (EnglishUi()) {
+                output << "...and " << pair_counts.size() - shown
+                       << " more furniture types\n";
+            } else {
+                output << "……另有 " << pair_counts.size() - shown
+                       << " 种家具\n";
+            }
             break;
         }
         const auto definition = g_catalog.find(item_id);
@@ -202,15 +248,24 @@ std::string BatchPreview(
                << (definition != g_catalog.end()
                        ? definition->second.display_name
                        : item_id)
-               << " × " << count << " 组\n";
+               << " × " << count
+               << (EnglishUi() ? " pairs\n" : " 组\n");
         ++shown;
     }
 
-    output << "\n强化 Rare 会在保留实例上写入持久标记，保存并重开后仍为基础数值 4 倍。\n"
-           << "合并会分散到连续游戏帧执行，完成提示会自动消失。\n"
-           << "Rare 也会使负面属性翻倍。\n\n"
-           << "游戏标记为不可 Rare 的特殊家具（例如食物箱）不会参与。\n\n"
-           << "开始批量合并？";
+    if (EnglishUi()) {
+        output << "\nThe enhanced Rare marker is stored on the kept item and remains 4x after saving and reloading.\n"
+               << "The batch is processed across consecutive game frames, and the completion notice closes automatically.\n"
+               << "Rare multipliers also increase negative attributes.\n\n"
+               << "Special furniture that the game marks as unable to become Rare, such as the Food Box, is skipped.\n\n"
+               << "Start batch combine?";
+    } else {
+        output << "\n强化 Rare 会在保留实例上写入持久标记，保存并重开后仍为基础数值 4 倍。\n"
+               << "合并会分散到连续游戏帧执行，完成提示会自动消失。\n"
+               << "Rare 也会使负面属性翻倍。\n\n"
+               << "游戏标记为不可 Rare 的特殊家具（例如食物箱）不会参与。\n\n"
+               << "开始批量合并？";
+    }
     return output.str();
 }
 
@@ -241,17 +296,32 @@ void EnsureConfig() {
     const std::string text{
         std::istreambuf_iterator<char>(stream),
         std::istreambuf_iterator<char>()};
-    std::smatch match;
-    if (!std::regex_search(
-            text, match,
+    std::smatch hotkey_match;
+    if (std::regex_search(
+            text, hotkey_match,
             std::regex(R"cdf("hotkey"\s*:\s*"F([1-9]|1[0-2])")cdf",
                        std::regex::icase))) {
+        const int function_key = std::stoi(hotkey_match[1].str());
+        g_hotkey = VK_F1 + function_key - 1;
+        Log("config hotkey=F" + std::to_string(function_key));
+    } else {
         Log("config hotkey invalid; using F8");
-        return;
     }
-    const int function_key = std::stoi(match[1].str());
-    g_hotkey = VK_F1 + function_key - 1;
-    Log("config hotkey=F" + std::to_string(function_key));
+
+    std::smatch language_match;
+    if (std::regex_search(
+            text, language_match,
+            std::regex(
+                R"cdf("language"\s*:\s*"(zh-CN|en-US)")cdf",
+                std::regex::icase))) {
+        const auto language = language_match[1].str();
+        g_language = !language.empty() &&
+                (language.front() == 'e' || language.front() == 'E')
+            ? UiLanguage::English
+            : UiLanguage::Chinese;
+    }
+    Log(std::string("config language=") +
+        (EnglishUi() ? "en-US" : "zh-CN"));
 }
 
 void ClearBatch() {
@@ -277,13 +347,23 @@ void StopBatch(
             << " seh=0x" << std::hex << failure.seh_code
             << " exception_rva=0x" << failure.exception_rva;
     Log(message.str());
-    ShowTransient(
-        "批量合并已停止。已完成 " +
-            std::to_string(g_batch.next_index) + " / " +
-            std::to_string(g_batch.candidates.size()) +
-            " 组。详情请查看 MOD 日志。",
-        MB_ICONERROR,
-        4000U);
+    if (EnglishUi()) {
+        ShowTransient(
+            "Batch combine stopped. Completed " +
+                std::to_string(g_batch.next_index) + " / " +
+                std::to_string(g_batch.candidates.size()) +
+                " pairs. See the mod log for details.",
+            MB_ICONERROR,
+            4000U);
+    } else {
+        ShowTransient(
+            "批量合并已停止。已完成 " +
+                std::to_string(g_batch.next_index) + " / " +
+                std::to_string(g_batch.candidates.size()) +
+                " 组。详情请查看 MOD 日志。",
+            MB_ICONERROR,
+            4000U);
+    }
     ClearBatch();
 }
 
@@ -297,12 +377,22 @@ void FinishBatch() {
     Log("batch complete pairs=" + std::to_string(completed));
     g_refresh_after_furniture_reentry = true;
     g_furniture_exit_seen = false;
-    ShowTransient(
-        "批量合并完成：已合并 " + std::to_string(completed) +
-        " 组重复家具（普通 " + std::to_string(ordinary_pairs) +
-        "，Rare " + std::to_string(rare_pairs) + "）。",
-        MB_ICONINFORMATION,
-        2500U);
+    if (EnglishUi()) {
+        ShowTransient(
+            "Batch combine complete: " + std::to_string(completed) +
+                " duplicate pairs combined (ordinary " +
+                std::to_string(ordinary_pairs) + ", Rare " +
+                std::to_string(rare_pairs) + ").",
+            MB_ICONINFORMATION,
+            2500U);
+    } else {
+        ShowTransient(
+            "批量合并完成：已合并 " + std::to_string(completed) +
+                " 组重复家具（普通 " + std::to_string(ordinary_pairs) +
+                "，Rare " + std::to_string(rare_pairs) + "）。",
+            MB_ICONINFORMATION,
+            2500U);
+    }
     ClearBatch();
 }
 
@@ -396,7 +486,10 @@ void HandleCombine(void* scene_manager) {
 
     if (!EnsureCatalog()) {
         ShowTransient(
-            "家具数据读取失败：\n" + g_catalog_error,
+            Localized(
+                "家具数据读取失败：\n",
+                "Failed to read furniture data:\n") +
+                g_catalog_error,
             MB_ICONERROR,
             4000U);
         ClearBatch();
@@ -428,14 +521,20 @@ void HandleCombine(void* scene_manager) {
     }
     if (!snapshot.complete || !port.SignaturesValid()) {
         ShowTransient(
-            "当前家具状态无法读取，未修改任何家具。",
+            Localized(
+                "当前家具状态无法读取，未修改任何家具。",
+                "The current furniture state could not be read. No furniture was changed."),
             MB_ICONERROR,
             3500U);
         ClearBatch();
         return;
     }
     if (candidates.empty()) {
-        ShowTransient("没有可合并的相同普通或 Rare 家具。", MB_ICONINFORMATION);
+        ShowTransient(
+            Localized(
+                "没有可合并的相同普通或 Rare 家具。",
+                "No matching ordinary or Rare furniture can be combined."),
+            MB_ICONINFORMATION);
         ClearBatch();
         return;
     }
@@ -444,7 +543,7 @@ void HandleCombine(void* scene_manager) {
     const auto choice = MessageBoxW(
         nullptr,
         Wide(BatchPreview(candidates)).c_str(),
-        L"批量合并重复家具",
+        DialogTitle(),
         MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_SETFOREGROUND);
     if (choice != IDYES) {
         Log("batch confirmation cancelled pairs=" +
@@ -463,7 +562,9 @@ void HandleCombine(void* scene_manager) {
         " complete=" + std::to_string(refreshed_snapshot.complete));
     if (!refreshed_snapshot.complete || !port.SignaturesValid()) {
         ShowTransient(
-            "确认后家具状态无法重新读取，未修改任何家具。",
+            Localized(
+                "确认后家具状态无法重新读取，未修改任何家具。",
+                "The furniture state could not be read again after confirmation. No furniture was changed."),
             MB_ICONERROR,
             3500U);
         ClearBatch();
@@ -471,7 +572,9 @@ void HandleCombine(void* scene_manager) {
     }
     if (candidates.empty()) {
         ShowTransient(
-            "确认后家具状态已变化，目前没有可合并的家具。",
+            Localized(
+                "确认后家具状态已变化，目前没有可合并的家具。",
+                "The furniture state changed after confirmation, and there are no longer any pairs to combine."),
             MB_ICONINFORMATION,
             3000U);
         ClearBatch();

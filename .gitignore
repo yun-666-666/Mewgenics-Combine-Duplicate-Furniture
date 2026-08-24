@@ -1,3 +1,11 @@
-/build/
-/build-ninja/
-/dist/
+build*/
+dist/
+.vs/
+out/
+*.log
+*.dmp
+*.sav
+*.user
+*.suo
+/config.json
+/SuperMeatBoyArcadeMachine/
