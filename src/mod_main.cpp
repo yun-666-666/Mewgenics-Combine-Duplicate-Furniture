@@ -46,6 +46,7 @@ struct BatchState {
     std::vector<cdf::CombineCandidate> candidates;
     std::size_t next_index{};
     std::vector<void*> pending_components;
+    void* furniture_ui{};
 };
 
 BatchState g_batch;
@@ -328,7 +329,7 @@ void ProcessBatch(void* scene_manager) {
 
     const auto candidate = g_batch.candidates[g_batch.next_index];
     cdf::NativeTransactionPort port(scene_manager);
-    if (!cdf::RequestFurnitureUiRefresh(scene_manager)) {
+    if (!cdf::RequestFurnitureUiRefresh(g_batch.furniture_ui)) {
         StopBatch("request_ui_refresh", candidate, {});
         return;
     }
@@ -399,6 +400,16 @@ void HandleCombine(void* scene_manager) {
             "家具数据读取失败：\n" + g_catalog_error,
             MB_ICONERROR,
             4000U);
+        ClearBatch();
+        return;
+    }
+
+    g_batch.furniture_ui = cdf::FindFurnitureUi(scene_manager);
+    if (!g_batch.furniture_ui) {
+        ShowTransient(
+            "当前家具界面无法读取，未修改任何家具。",
+            MB_ICONERROR,
+            3500U);
         ClearBatch();
         return;
     }
