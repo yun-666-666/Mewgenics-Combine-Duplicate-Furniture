@@ -383,23 +383,11 @@ void __fastcall SceneReadyHook(void* scene_manager) {
     }
     EnsureConfig();
     EnsureCatalog();
-    const bool furniture_mode = cdf::FurnitureModeActive(scene_manager);
     if (g_busy) {
-        if (!furniture_mode) {
-            Log("batch cancelled because furniture mode closed completed=" +
-                std::to_string(g_batch.next_index) +
-                " planned=" + std::to_string(g_batch.candidates.size()));
-            ShowTransient(
-                "已退出家具模式，批量合并停止。",
-                MB_ICONWARNING,
-                3000U);
-            ClearBatch();
-            return;
-        }
         ProcessBatch(scene_manager);
         return;
     }
-    if (!furniture_mode) {
+    if (!cdf::FurnitureModeActive(scene_manager)) {
         return;
     }
     if ((GetAsyncKeyState(g_hotkey) & 1) != 0) {
