@@ -80,7 +80,8 @@ CdfNativeMutationResult cdf_native_set_rare(
 CdfNativeMutationResult cdf_native_consume(
     void* scene_manager,
     uint64_t stable_key,
-    const char* expected_item);
+    const char* expected_item,
+    uint64_t expected_flags);
 
 CdfNativeStoreResult cdf_native_store(
     void* scene_manager,

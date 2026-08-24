@@ -104,9 +104,10 @@ bool NativeTransactionPort::ClearRare(
 
 bool NativeTransactionPort::Consume(
     std::uint64_t stable_key,
-    const std::string& item_id) {
+    const std::string& item_id,
+    std::uint64_t expected_flags) {
     const auto result = cdf_native_consume(
-        scene_manager_, stable_key, item_id.c_str());
+        scene_manager_, stable_key, item_id.c_str(), expected_flags);
     last_failure_ = {result.seh_code, result.exception_rva};
     return result.success != 0;
 }

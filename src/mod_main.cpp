@@ -162,15 +162,25 @@ std::string BatchPreview(
     const std::vector<cdf::CombineCandidate>& candidates) {
     std::map<std::string, std::size_t> pair_counts;
     std::size_t placed_pairs{};
+    std::size_t ordinary_pairs{};
+    std::size_t rare_pairs{};
     for (const auto& candidate : candidates) {
         ++pair_counts[candidate.item_id];
         placed_pairs += candidate.consume_placed ? 1U : 0U;
+        candidate.promote_to_rare ? ++ordinary_pairs : ++rare_pairs;
     }
 
     std::ostringstream output;
-    output << "发现 " << candidates.size() << " 组可合并的普通家具。\n\n"
-           << "确认后将消耗 " << candidates.size() << " 件普通家具，\n"
-           << "并保留 " << candidates.size() << " 件原生 Rare 家具。\n";
+    output << "发现 " << candidates.size() << " 组可合并的重复家具。\n\n";
+    if (ordinary_pairs != 0U) {
+        output << "- " << ordinary_pairs
+               << " 组普通同款：每组升级并保留 1 件原生 Rare。\n";
+    }
+    if (rare_pairs != 0U) {
+        output << "- " << rare_pairs
+               << " 组 Rare 同款：每组保留 1 件 Rare，清掉 1 件重复件。\n";
+    }
+    output << "合计将消耗 " << candidates.size() << " 件重复家具。\n";
     if (placed_pairs != 0U) {
         output << "其中 " << placed_pairs
                << " 组需要先把材料家具从房间收回家具栏。\n";
@@ -194,7 +204,8 @@ std::string BatchPreview(
         ++shown;
     }
 
-    output << "\n合并会分散到连续游戏帧执行，完成提示会自动消失。\n"
+    output << "\n游戏原生没有 Rare 之上的家具稀有度；Rare+Rare 只会去重。\n"
+           << "合并会分散到连续游戏帧执行，完成提示会自动消失。\n"
            << "Rare 也会使负面属性翻倍。\n\n"
            << "游戏标记为不可 Rare 的特殊家具（例如食物箱）不会参与。\n\n"
            << "开始批量合并？";
@@ -276,10 +287,16 @@ void StopBatch(
 
 void FinishBatch() {
     const auto completed = g_batch.next_index;
+    std::size_t ordinary_pairs{};
+    std::size_t rare_pairs{};
+    for (const auto& candidate : g_batch.candidates) {
+        candidate.promote_to_rare ? ++ordinary_pairs : ++rare_pairs;
+    }
     Log("batch complete pairs=" + std::to_string(completed));
     ShowTransient(
         "批量合并完成：已合并 " + std::to_string(completed) +
-        " 组重复普通家具。",
+        " 组重复家具（普通 " + std::to_string(ordinary_pairs) +
+        "，Rare " + std::to_string(rare_pairs) + "）。",
         MB_ICONINFORMATION,
         2500U);
     ClearBatch();
@@ -311,7 +328,7 @@ void ProcessBatch(void* scene_manager) {
 
     const auto candidate = g_batch.candidates[g_batch.next_index];
     cdf::NativeTransactionPort port(scene_manager);
-    if (!port.SetRare(
+    if (candidate.promote_to_rare && !port.SetRare(
             candidate.keep_key,
             candidate.item_id,
             candidate.keep_flags)) {
@@ -319,11 +336,19 @@ void ProcessBatch(void* scene_manager) {
         return;
     }
 
-    if (!port.Consume(candidate.consume_key, candidate.item_id)) {
+    if (!port.Consume(
+            candidate.consume_key,
+            candidate.item_id,
+            candidate.consume_flags)) {
         const auto failure = port.LastFailure();
-        const bool rollback =
+        const bool rollback = candidate.promote_to_rare &&
             port.ClearRare(candidate.keep_key, candidate.item_id);
-        StopBatch("consume", candidate, failure, true, rollback);
+        StopBatch(
+            "consume",
+            candidate,
+            failure,
+            candidate.promote_to_rare,
+            rollback);
         return;
     }
 
@@ -335,6 +360,9 @@ void ProcessBatch(void* scene_manager) {
                 << " item=" << candidate.item_id
                 << " keep_key=" << candidate.keep_key
                 << " consume_key=" << candidate.consume_key
+                << " kind="
+                << (candidate.promote_to_rare ? "ordinary_to_rare" :
+                                                "rare_deduplicate")
                 << " stored_from_room=" << candidate.consume_placed;
         Log(message.str());
     }
@@ -365,12 +393,19 @@ void HandleCombine(void* scene_manager) {
         rare_count += item.IsRare() ? 1U : 0U;
     }
     auto candidates = cdf::FindCandidates(snapshot, g_catalog);
+    std::size_t ordinary_candidates{};
+    std::size_t rare_candidates{};
+    for (const auto& candidate : candidates) {
+        candidate.promote_to_rare ? ++ordinary_candidates : ++rare_candidates;
+    }
     {
         std::ostringstream message;
         message << "scan total=" << snapshot.furniture.size()
                 << " normal=" << snapshot.furniture.size() - rare_count
                 << " rare=" << rare_count
                 << " candidates=" << candidates.size()
+                << " ordinary_candidates=" << ordinary_candidates
+                << " rare_candidates=" << rare_candidates
                 << " complete=" << snapshot.complete;
         Log(message.str());
     }
@@ -383,7 +418,7 @@ void HandleCombine(void* scene_manager) {
         return;
     }
     if (candidates.empty()) {
-        ShowTransient("没有可合并的相同普通家具。", MB_ICONINFORMATION);
+        ShowTransient("没有可合并的相同普通或 Rare 家具。", MB_ICONINFORMATION);
         ClearBatch();
         return;
     }

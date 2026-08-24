@@ -62,6 +62,7 @@ struct CombineCandidate {
     std::uint64_t consume_flags{};
     std::size_t scanned_count{};
     bool consume_placed{};
+    bool promote_to_rare{};
 };
 
 [[nodiscard]] bool HasDuplicateStableKeys(
@@ -101,7 +102,8 @@ public:
         const std::string& item_id) = 0;
     [[nodiscard]] virtual bool Consume(
         std::uint64_t stable_key,
-        const std::string& item_id) = 0;
+        const std::string& item_id,
+        std::uint64_t expected_flags) = 0;
 };
 
 [[nodiscard]] ExecuteResult ExecuteCandidate(

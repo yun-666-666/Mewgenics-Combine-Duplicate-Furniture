@@ -484,7 +484,8 @@ CdfNativeMutationResult cdf_native_set_rare(
 CdfNativeMutationResult cdf_native_consume(
     void* scene_manager,
     uint64_t stable_key,
-    const char* expected_item) {
+    const char* expected_item,
+    uint64_t expected_flags) {
     CdfNativeMutationResult result;
     uint8_t* executable = (uint8_t*)GetModuleHandleW(NULL);
     void* storage;
@@ -498,7 +499,8 @@ CdfNativeMutationResult cdf_native_consume(
     storage = cdf_storage();
     entry = cdf_find_entry(stable_key, expected_item, &flags);
     cdf_find_piece(scene_manager, stable_key, &piece_count);
-    if (!storage || !entry || (flags & ~2ULL) != 0ULL ||
+    if (!storage || !entry || flags != expected_flags ||
+        (flags & ~2ULL) != 0ULL ||
         piece_count != 0U) {
         return result;
     }

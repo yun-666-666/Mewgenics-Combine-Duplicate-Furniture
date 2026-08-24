@@ -26,7 +26,8 @@ public:
         const std::string& item_id) override;
     [[nodiscard]] bool Consume(
         std::uint64_t stable_key,
-        const std::string& item_id) override;
+        const std::string& item_id,
+        std::uint64_t expected_flags) override;
     [[nodiscard]] bool Store(
         std::uint64_t stable_key,
         const std::string& item_id);

@@ -106,13 +106,15 @@ public:
 
     bool Consume(
         std::uint64_t key,
-        const std::string& id) override {
+        const std::string& id,
+        std::uint64_t expected_flags) override {
         ++consume_calls;
         if (!consume_ok) {
             return false;
         }
         const auto found = Find(key, id);
-        if (found == current.furniture.end()) {
+        if (found == current.furniture.end() ||
+            found->placement_flags != expected_flags) {
             return false;
         }
         current.furniture.erase(found);
@@ -218,12 +220,16 @@ void OrdinaryAndRareDoNotCombine() {
         Catalog()).empty());
 }
 
-void TwoRareDoNotCombine() {
-    CHECK(cdf::FindCandidates(
+void TwoRareCreateConsolidationCandidate() {
+    const auto candidates = cdf::FindCandidates(
         Snapshot({
             Item(1, "chair", cdf::kRareFlag),
             Item(2, "chair", cdf::kRareFlag)}),
-        Catalog()).empty());
+        Catalog());
+    CHECK(candidates.size() == 1);
+    CHECK(candidates[0].keep_key == 1);
+    CHECK(candidates[0].consume_key == 2);
+    CHECK(!candidates[0].promote_to_rare);
 }
 
 void CanBeRareFalseDoesNotCombine() {
@@ -275,6 +281,21 @@ void OneExecutionConsumesOnlyOneGroup() {
     CHECK(port.current.furniture.size() == 3);
 }
 
+void RareExecutionConsumesDuplicateWithoutConversion() {
+    const auto snapshot = Snapshot({
+        Item(1, "chair", cdf::kRareFlag),
+        Item(2, "chair", cdf::kRareFlag)});
+    auto candidate = FirstCandidate(snapshot, Catalog());
+    FakePort port;
+    port.current = snapshot;
+    const auto result = cdf::ExecuteCandidate(candidate, port);
+    CHECK(result.status == ExecuteStatus::Success);
+    CHECK(port.set_rare_calls == 0);
+    CHECK(port.consume_calls == 1);
+    CHECK(port.current.furniture.size() == 1);
+    CHECK(port.current.furniture[0].IsRare());
+}
+
 void StableKeyChangeCancels() {
     const auto sealed = Snapshot({Item(1), Item(2)});
     auto candidate = FirstCandidate(sealed, Catalog());
@@ -297,6 +318,24 @@ void ConsumeFailureIsNotSuccess() {
     CHECK(result.rare_rollback_attempted);
     CHECK(result.rare_rollback_succeeded);
     CHECK(!port.current.furniture[0].IsRare());
+}
+
+void RareConsumeFailureDoesNotClearExistingRare() {
+    const auto snapshot = Snapshot({
+        Item(1, "chair", cdf::kRareFlag),
+        Item(2, "chair", cdf::kRareFlag)});
+    auto candidate = FirstCandidate(snapshot, Catalog());
+    FakePort port;
+    port.current = snapshot;
+    port.consume_ok = false;
+    const auto result = cdf::ExecuteCandidate(candidate, port);
+    CHECK(result.status == ExecuteStatus::ConsumeFailed);
+    CHECK(!result.rare_rollback_attempted);
+    CHECK(!result.rare_rollback_succeeded);
+    CHECK(port.current.furniture.size() == 2);
+    CHECK(std::ranges::all_of(
+        port.current.furniture,
+        [](const auto& item) { return item.IsRare(); }));
 }
 
 void RareConversionFailureLeavesBothOrdinary() {
@@ -338,15 +377,17 @@ int main() {
         {"stored consume priority", StoredConsumeStillHasPriority},
         {"different item", DifferentItemsDoNotCombine},
         {"ordinary rare", OrdinaryAndRareDoNotCombine},
-        {"two rare", TwoRareDoNotCombine},
+        {"two rare", TwoRareCreateConsolidationCandidate},
         {"can_be_rare false", CanBeRareFalseDoesNotCombine},
         {"unknown flags", UnknownPlacementFlagDoesNotCombine},
         {"deterministic order", CandidateOrderIsDeterministic},
         {"fridge preview", FridgePreviewAttributesDouble},
         {"negative attributes", NegativeAttributesDouble},
         {"one group", OneExecutionConsumesOnlyOneGroup},
+        {"rare group", RareExecutionConsumesDuplicateWithoutConversion},
         {"stable key change", StableKeyChangeCancels},
         {"consume failure", ConsumeFailureIsNotSuccess},
+        {"rare consume failure", RareConsumeFailureDoesNotClearExistingRare},
         {"rare failure", RareConversionFailureLeavesBothOrdinary},
         {"delete pending", DeletePendingIsNotCandidate},
         {"duplicate stable key", DuplicateStableKeysAreRejected}};
@@ -360,6 +401,6 @@ int main() {
         std::cerr << g_failures << " focused checks failed\n";
         return EXIT_FAILURE;
     }
-    std::cout << "All 21 focused checks passed\n";
+    std::cout << "All 23 focused checks passed\n";
     return EXIT_SUCCESS;
 }

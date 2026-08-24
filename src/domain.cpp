@@ -35,20 +35,22 @@ std::vector<CombineCandidate> FindCandidates(
         return result;
     }
 
-    std::map<std::string, std::vector<const FurnitureInstance*>> by_item;
+    using CandidateGroup = std::pair<std::string, bool>;
+    std::map<CandidateGroup, std::vector<const FurnitureInstance*>> by_item;
     for (const auto& instance : snapshot.furniture) {
         const auto definition = catalog.find(instance.item_id);
         if (instance.stable_key == 0 || instance.delete_pending ||
-            instance.IsRare() || !instance.HasOnlyKnownFlags() ||
+            !instance.HasOnlyKnownFlags() ||
             instance.runtime_match_count > 1 ||
             definition == catalog.end() ||
             !definition->second.can_be_rare) {
             continue;
         }
-        by_item[instance.item_id].push_back(&instance);
+        by_item[{instance.item_id, instance.IsRare()}].push_back(&instance);
     }
 
-    for (auto& [item_id, instances] : by_item) {
+    for (auto& [group, instances] : by_item) {
+        const auto& [item_id, already_rare] = group;
         std::vector<const FurnitureInstance*> stored;
         std::vector<const FurnitureInstance*> placed_live;
         std::vector<const FurnitureInstance*> placed_unavailable;
@@ -76,7 +78,8 @@ std::vector<CombineCandidate> FindCandidates(
                 keep->placement_flags,
                 consume->placement_flags,
                 snapshot.furniture.size(),
-                !consume->room_id.empty()});
+                !consume->room_id.empty(),
+                !already_rare});
         };
 
         std::vector<const FurnitureInstance*> placed_keeps;
@@ -142,12 +145,14 @@ const FurnitureInstance* FindUnique(
 bool MatchesSealed(
     const FurnitureInstance* instance,
     std::string_view item_id,
-    std::uint64_t flags) {
+    std::uint64_t flags,
+    bool expected_rare) {
     return instance && !instance->delete_pending &&
         instance->runtime_match_count <= 1 &&
         instance->item_id == item_id &&
         instance->placement_flags == flags &&
-        !instance->IsRare() && instance->HasOnlyKnownFlags();
+        instance->IsRare() == expected_rare &&
+        instance->HasOnlyKnownFlags();
 }
 
 }  // namespace
@@ -165,15 +170,23 @@ ExecuteResult ExecuteCandidate(
     }
     const auto* keep = FindUnique(before, candidate.keep_key);
     const auto* consume = FindUnique(before, candidate.consume_key);
+    const bool already_rare = !candidate.promote_to_rare;
     if (candidate.keep_key == candidate.consume_key ||
-        !MatchesSealed(keep, candidate.item_id, candidate.keep_flags) ||
         !MatchesSealed(
-            consume, candidate.item_id, candidate.consume_flags)) {
+            keep,
+            candidate.item_id,
+            candidate.keep_flags,
+            already_rare) ||
+        !MatchesSealed(
+            consume,
+            candidate.item_id,
+            candidate.consume_flags,
+            already_rare)) {
         result.stage = "sealed_pair";
         return result;
     }
 
-    if (!port.SetRare(
+    if (candidate.promote_to_rare && !port.SetRare(
             candidate.keep_key,
             candidate.item_id,
             candidate.keep_flags)) {
@@ -182,12 +195,17 @@ ExecuteResult ExecuteCandidate(
         return result;
     }
 
-    if (!port.Consume(candidate.consume_key, candidate.item_id)) {
+    if (!port.Consume(
+            candidate.consume_key,
+            candidate.item_id,
+            candidate.consume_flags)) {
         result.status = ExecuteStatus::ConsumeFailed;
         result.stage = "consume";
-        result.rare_rollback_attempted = true;
-        result.rare_rollback_succeeded =
-            port.ClearRare(candidate.keep_key, candidate.item_id);
+        if (candidate.promote_to_rare) {
+            result.rare_rollback_attempted = true;
+            result.rare_rollback_succeeded =
+                port.ClearRare(candidate.keep_key, candidate.item_id);
+        }
         return result;
     }
 
@@ -198,6 +216,7 @@ ExecuteResult ExecuteCandidate(
     if (!after.complete || HasDuplicateStableKeys(after.furniture) ||
         after.furniture.size() + 1 != before.furniture.size() ||
         !kept || kept->item_id != candidate.item_id ||
+        kept->placement_flags != (candidate.keep_flags | kRareFlag) ||
         !kept->IsRare() || consumed != nullptr) {
         result.status = ExecuteStatus::VerificationFailed;
         result.stage = "post_scan";

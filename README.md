@@ -3,9 +3,10 @@
 Independent Windows x64 DLL mod for the current local Mewgenics build.
 
 - Enter furniture mode and press `F8` (configurable to `F1`-`F12` in `Mods/CombineDuplicateFurniture/config.json`).
-- The mod scans current furniture records and builds every deterministic pair of identical ordinary furniture.
+- The mod scans current furniture records and builds every deterministic pair of identical furniture at the same rarity.
 - It shows one batch summary and asks for confirmation once.
-- On confirmation it processes one pair per game frame, sets each kept instance's native `0x2` Rare flag, and consumes each duplicate through the game's native deletion path.
+- For ordinary pairs it sets the kept instance's native `0x2` Rare flag and consumes the duplicate through the game's native deletion path.
+- For Rare pairs it keeps one native Rare instance and consumes the duplicate. The game has no native furniture rarity above Rare.
 - Stored duplicates are consumed directly. Room furniture is identified from its native room field and all room materials are queued for native recall in the confirmation frame, before the modal focus change closes furniture mode.
 - After the batch confirmation closes, the mod scans and rebuilds the plan again so room-component changes during the dialog cannot leave stale work queued.
 - Special furniture that the game marks `can_be_rare false`, such as the Food Box, is never combined.
