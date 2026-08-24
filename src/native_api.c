@@ -12,8 +12,7 @@ enum {
     CDF_FURNITURE_STORAGE_GLOBAL_RVA = 0x13D16E0,
     CDF_FURNITURE_PIECE_VTABLE_RVA = 0xEDE690,
     CDF_FURNITURE_BUILDING_UI_VTABLE_RVA = 0xF082A8,
-    CDF_SCENE_COMPONENT_COUNT_OFFSET = 0x74,
-    CDF_SCENE_COMPONENT_DATA_OFFSET = 0x78,
+    CDF_SCENE_COMPONENT_LIST_OFFSET = 0x18,
     CDF_FURNITURE_MODE_ACTIVE_OFFSET = 0x78,
     CDF_COMPONENT_CONTEXT_OFFSET = 0x18,
     CDF_CONTEXT_DELETE_STATE_OFFSET = 0x18,
@@ -33,6 +32,12 @@ typedef struct CdfNarrowString {
     uint64_t size;
     uint64_t capacity;
 } CdfNarrowString;
+
+typedef struct CdfPointerVector {
+    uint32_t capacity;
+    uint32_t size;
+    void** data;
+} CdfPointerVector;
 
 typedef void (__fastcall* CdfStorageDeleteFn)(void*, uint64_t);
 typedef void (__fastcall* CdfTrashPieceFn)(void*);
@@ -192,15 +197,20 @@ static int cdf_scene_components(
     void* scene_manager,
     void*** data,
     uint32_t* count) {
+    CdfPointerVector* components;
     if (!scene_manager || !data || !count || !cdf_readable(
-            scene_manager, CDF_SCENE_COMPONENT_DATA_OFFSET + sizeof(void*))) {
+            scene_manager, CDF_SCENE_COMPONENT_LIST_OFFSET + sizeof(void*))) {
         return 0;
     }
     __try {
-        *count = *(uint32_t*)((uint8_t*)scene_manager +
-            CDF_SCENE_COMPONENT_COUNT_OFFSET);
-        *data = *(void***)((uint8_t*)scene_manager +
-            CDF_SCENE_COMPONENT_DATA_OFFSET);
+        components = *(CdfPointerVector**)((uint8_t*)scene_manager +
+            CDF_SCENE_COMPONENT_LIST_OFFSET);
+        if (!components || !cdf_readable(components, sizeof(*components)) ||
+            components->size > components->capacity) {
+            return 0;
+        }
+        *count = components->size;
+        *data = components->data;
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;
