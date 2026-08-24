@@ -123,15 +123,16 @@ static uint32_t cdf_image_size(HMODULE executable) {
 
 static LONG cdf_capture_exception(
     EXCEPTION_POINTERS* exception,
-    CdfNativeMutationResult* result) {
+    uint32_t* seh_code,
+    uintptr_t* exception_rva) {
     HMODULE executable = GetModuleHandleW(NULL);
-    if (exception && exception->ExceptionRecord && result) {
+    if (exception && exception->ExceptionRecord && seh_code && exception_rva) {
         const uintptr_t address =
             (uintptr_t)exception->ExceptionRecord->ExceptionAddress;
         const uintptr_t base = (uintptr_t)executable;
         const uint32_t image_size = cdf_image_size(executable);
-        result->seh_code = exception->ExceptionRecord->ExceptionCode;
-        result->exception_rva = address >= base && address - base < image_size
+        *seh_code = exception->ExceptionRecord->ExceptionCode;
+        *exception_rva = address >= base && address - base < image_size
             ? address - base
             : 0U;
     }
@@ -468,7 +469,8 @@ CdfNativeMutationResult cdf_native_set_rare(
             ((*(uint64_t*)((uint8_t*)entry + CDF_ENTRY_FLAGS_OFFSET) & 2ULL)
              != 0ULL) == (enabled != 0U));
     }
-    __except (cdf_capture_exception(GetExceptionInformation(), &result)) {
+    __except (cdf_capture_exception(
+        GetExceptionInformation(), &result.seh_code, &result.exception_rva)) {
         result.success = 0U;
     }
     return result;
@@ -502,51 +504,120 @@ CdfNativeMutationResult cdf_native_consume(
         result.success = (uint8_t)(
             cdf_find_entry(stable_key, expected_item, NULL) == NULL);
     }
-    __except (cdf_capture_exception(GetExceptionInformation(), &result)) {
+    __except (cdf_capture_exception(
+        GetExceptionInformation(), &result.seh_code, &result.exception_rva)) {
         result.success = 0U;
     }
     return result;
 }
 
-CdfNativeMutationResult cdf_native_store(
+CdfNativeStoreResult cdf_native_store(
     void* scene_manager,
     uint64_t stable_key,
     const char* expected_item) {
-    CdfNativeMutationResult result;
+    CdfNativeStoreResult result;
     uint8_t* executable = (uint8_t*)GetModuleHandleW(NULL);
     void* entry;
     void* piece;
     uint64_t flags;
     uint32_t piece_count;
-    char room[CDF_NATIVE_TEXT_CAPACITY];
+    void* before_grid;
+    void* before_piece_entry;
+    void* after_grid;
+    void* after_piece_entry;
     memset(&result, 0, sizeof(result));
-    if (!scene_manager || !cdf_signatures_valid()) {
+    if (!scene_manager || !expected_item || expected_item[0] == '\0') {
         return result;
     }
+    result.probe_flags |= CDF_STORE_PROBE_INPUT_VALID;
+    if (!cdf_signatures_valid()) {
+        return result;
+    }
+    result.probe_flags |= CDF_STORE_PROBE_SIGNATURES_VALID;
     entry = cdf_find_entry(stable_key, expected_item, &flags);
+    if (entry) {
+        result.probe_flags |= CDF_STORE_PROBE_ENTRY_FOUND;
+        result.entry_flags = flags;
+    }
     piece = cdf_find_piece(scene_manager, stable_key, &piece_count);
+    result.piece_count = piece_count;
+    if (piece) {
+        result.probe_flags |= CDF_STORE_PROBE_PIECE_FOUND;
+    }
+    if (piece_count == 1U) {
+        result.probe_flags |= CDF_STORE_PROBE_PIECE_COUNT_ONE;
+    }
+    if (entry && (flags & ~2ULL) == 0ULL) {
+        result.probe_flags |= CDF_STORE_PROBE_FLAGS_VALID;
+    }
     if (!entry || !piece || piece_count != 1U ||
         (flags & ~2ULL) != 0ULL) {
         return result;
     }
     __try {
-        ((CdfStorePieceFn)(
-            executable + CDF_FURNITURE_STORE_PIECE_RVA))(piece);
-        result.pending_component = piece;
-        result.success = (uint8_t)(
-            cdf_delete_queued(piece) &&
-            cdf_copy_string(
+        before_grid = *(void**)((uint8_t*)piece + CDF_PIECE_GRID_OFFSET);
+        before_piece_entry =
+            *(void**)((uint8_t*)piece + CDF_PIECE_ENTRY_OFFSET);
+        if (before_grid) {
+            result.probe_flags |= CDF_STORE_PROBE_BEFORE_GRID_PRESENT;
+        }
+        if (before_piece_entry == entry) {
+            result.probe_flags |= CDF_STORE_PROBE_BEFORE_ENTRY_MATCH;
+        }
+        if (cdf_copy_string(
                 (const CdfNarrowString*)((uint8_t*)entry +
                     CDF_ENTRY_ROOM_OFFSET),
-                room,
-                sizeof(room)) &&
-            room[0] == '\0' &&
-            cdf_readable(
-                piece, CDF_PIECE_ENTRY_OFFSET + sizeof(void*)) &&
-            *(void**)((uint8_t*)piece + CDF_PIECE_ENTRY_OFFSET) == NULL &&
-            cdf_find_entry(stable_key, expected_item, NULL) == entry);
+                result.before_room,
+                sizeof(result.before_room))) {
+            result.probe_flags |= CDF_STORE_PROBE_BEFORE_ROOM_READ;
+            if (result.before_room[0] != '\0') {
+                result.probe_flags |= CDF_STORE_PROBE_BEFORE_ROOM_NONEMPTY;
+            }
+        }
+        ((CdfStorePieceFn)(
+            executable + CDF_FURNITURE_STORE_PIECE_RVA))(piece);
+        result.probe_flags |= CDF_STORE_PROBE_CALL_COMPLETED;
+        result.pending_component = piece;
+        if (cdf_delete_queued(piece)) {
+            result.probe_flags |= CDF_STORE_PROBE_AFTER_DELETE_QUEUED;
+        }
+        if (cdf_copy_string(
+                (const CdfNarrowString*)((uint8_t*)entry +
+                    CDF_ENTRY_ROOM_OFFSET),
+                result.after_room,
+                sizeof(result.after_room))) {
+            result.probe_flags |= CDF_STORE_PROBE_AFTER_ROOM_READ;
+            if (result.after_room[0] == '\0') {
+                result.probe_flags |= CDF_STORE_PROBE_AFTER_ROOM_EMPTY;
+            }
+        }
+        if (cdf_readable(
+                piece, CDF_PIECE_ENTRY_OFFSET + sizeof(void*))) {
+            after_grid =
+                *(void**)((uint8_t*)piece + CDF_PIECE_GRID_OFFSET);
+            after_piece_entry =
+                *(void**)((uint8_t*)piece + CDF_PIECE_ENTRY_OFFSET);
+            if (!after_grid) {
+                result.probe_flags |= CDF_STORE_PROBE_AFTER_GRID_NULL;
+            }
+            if (!after_piece_entry) {
+                result.probe_flags |= CDF_STORE_PROBE_AFTER_ENTRY_NULL;
+            }
+        }
+        if (cdf_find_entry(stable_key, expected_item, NULL) == entry) {
+            result.probe_flags |= CDF_STORE_PROBE_AFTER_STORAGE_ENTRY_SAME;
+        }
+        if (cdf_native_scene_contains_component(scene_manager, piece)) {
+            result.probe_flags |= CDF_STORE_PROBE_AFTER_SCENE_CONTAINS;
+        }
+        result.success = (uint8_t)(
+            (result.probe_flags & CDF_STORE_PROBE_AFTER_DELETE_QUEUED) != 0U &&
+            (result.probe_flags & CDF_STORE_PROBE_AFTER_ROOM_EMPTY) != 0U &&
+            (result.probe_flags & CDF_STORE_PROBE_AFTER_ENTRY_NULL) != 0U &&
+            (result.probe_flags & CDF_STORE_PROBE_AFTER_STORAGE_ENTRY_SAME) != 0U);
     }
-    __except (cdf_capture_exception(GetExceptionInformation(), &result)) {
+    __except (cdf_capture_exception(
+        GetExceptionInformation(), &result.seh_code, &result.exception_rva)) {
         result.success = 0U;
     }
     return result;

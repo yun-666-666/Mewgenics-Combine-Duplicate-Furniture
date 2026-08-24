@@ -4,8 +4,50 @@
 
 #include <algorithm>
 #include <array>
+#include <iomanip>
+#include <sstream>
 
 namespace cdf {
+
+namespace {
+
+std::string FormatStoreProbe(const CdfNativeStoreResult& result) {
+    const auto has = [&result](std::uint32_t flag) {
+        return (result.probe_flags & flag) != 0U;
+    };
+    std::ostringstream output;
+    output << "probe=0x" << std::hex << result.probe_flags << std::dec
+           << " input=" << has(CDF_STORE_PROBE_INPUT_VALID)
+           << " signatures=" << has(CDF_STORE_PROBE_SIGNATURES_VALID)
+           << " entry=" << has(CDF_STORE_PROBE_ENTRY_FOUND)
+           << " piece=" << has(CDF_STORE_PROBE_PIECE_FOUND)
+           << " piece_count=" << result.piece_count
+           << " count_one=" << has(CDF_STORE_PROBE_PIECE_COUNT_ONE)
+           << " entry_flags=0x" << std::hex << result.entry_flags << std::dec
+           << " flags_valid=" << has(CDF_STORE_PROBE_FLAGS_VALID)
+           << " before_room_read=" << has(CDF_STORE_PROBE_BEFORE_ROOM_READ)
+           << " before_room_nonempty="
+           << has(CDF_STORE_PROBE_BEFORE_ROOM_NONEMPTY)
+           << " before_room=\"" << result.before_room << '"'
+           << " before_grid=" << has(CDF_STORE_PROBE_BEFORE_GRID_PRESENT)
+           << " before_entry_match="
+           << has(CDF_STORE_PROBE_BEFORE_ENTRY_MATCH)
+           << " call_completed=" << has(CDF_STORE_PROBE_CALL_COMPLETED)
+           << " after_delete_queued="
+           << has(CDF_STORE_PROBE_AFTER_DELETE_QUEUED)
+           << " after_room_read=" << has(CDF_STORE_PROBE_AFTER_ROOM_READ)
+           << " after_room_empty=" << has(CDF_STORE_PROBE_AFTER_ROOM_EMPTY)
+           << " after_room=\"" << result.after_room << '"'
+           << " after_grid_null=" << has(CDF_STORE_PROBE_AFTER_GRID_NULL)
+           << " after_entry_null=" << has(CDF_STORE_PROBE_AFTER_ENTRY_NULL)
+           << " after_storage_entry_same="
+           << has(CDF_STORE_PROBE_AFTER_STORAGE_ENTRY_SAME)
+           << " after_scene_contains="
+           << has(CDF_STORE_PROBE_AFTER_SCENE_CONTAINS);
+    return output.str();
+}
+
+}  // namespace
 
 NativeTransactionPort::NativeTransactionPort(void* scene_manager) noexcept
     : scene_manager_(scene_manager) {}
@@ -75,6 +117,7 @@ bool NativeTransactionPort::Store(
         scene_manager_, stable_key, item_id.c_str());
     last_failure_ = {result.seh_code, result.exception_rva};
     last_stored_component_ = result.pending_component;
+    last_store_probe_summary_ = FormatStoreProbe(result);
     return result.success != 0;
 }
 
@@ -88,6 +131,10 @@ NativeFailure NativeTransactionPort::LastFailure() const noexcept {
 
 void* NativeTransactionPort::LastStoredComponent() const noexcept {
     return last_stored_component_;
+}
+
+const std::string& NativeTransactionPort::LastStoreProbeSummary() const noexcept {
+    return last_store_probe_summary_;
 }
 
 bool FurnitureModeActive(void* scene_manager) noexcept {

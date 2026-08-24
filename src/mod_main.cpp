@@ -358,7 +358,13 @@ void ProcessBatch(void* scene_manager) {
                 std::to_string(remaining_placed));
         }
 
-        if (!port.Store(candidate.consume_key, candidate.item_id)) {
+        const bool stored =
+            port.Store(candidate.consume_key, candidate.item_id);
+        Log("room furniture store probe item=" + candidate.item_id +
+            " consume_key=" + std::to_string(candidate.consume_key) +
+            " success=" + std::to_string(stored) + " " +
+            port.LastStoreProbeSummary());
+        if (!stored) {
             StopBatch("store", candidate, port.LastFailure());
             return;
         }

@@ -7,6 +7,7 @@ Independent Windows x64 DLL mod for the current local Mewgenics build.
 - It shows one batch summary and asks for confirmation once.
 - On confirmation it processes one pair per game frame, sets each kept instance's native `0x2` Rare flag, and consumes each duplicate through the game's native deletion path.
 - Stored duplicates are consumed directly. The first time a batch needs a room furniture material, the mod asks once, then recalls all remaining room materials to the furniture inventory before consuming them.
+- Room-to-inventory recalls log a before/after native state probe so a rejected recall identifies the exact failed transition.
 - Completion and no-candidate notices close automatically and do not block the game thread.
 
 The independent log is written to `Mods/CombineDuplicateFurniture/logs/CombineDuplicateFurniture.log`.
