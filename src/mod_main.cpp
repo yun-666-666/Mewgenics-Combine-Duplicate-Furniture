@@ -328,6 +328,10 @@ void ProcessBatch(void* scene_manager) {
 
     const auto candidate = g_batch.candidates[g_batch.next_index];
     cdf::NativeTransactionPort port(scene_manager);
+    if (!cdf::RequestFurnitureUiRefresh(scene_manager)) {
+        StopBatch("request_ui_refresh", candidate, {});
+        return;
+    }
     if (candidate.promote_to_rare && !port.SetRare(
             candidate.keep_key,
             candidate.item_id,

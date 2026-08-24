@@ -65,6 +65,7 @@ typedef struct CdfNativeStoreResult {
 } CdfNativeStoreResult;
 
 int cdf_native_furniture_mode_active(void* scene_manager);
+int cdf_native_request_furniture_ui_refresh(void* scene_manager);
 
 CdfNativeScanResult cdf_native_scan(
     void* scene_manager,

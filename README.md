@@ -7,6 +7,7 @@ Independent Windows x64 DLL mod for the current local Mewgenics build.
 - It shows one batch summary and asks for confirmation once.
 - For ordinary pairs it sets the kept instance's native `0x2` Rare flag and consumes the duplicate through the game's native deletion path.
 - For Rare pairs it marks the kept instance as an enhanced Rare, consumes the duplicate, displays 4x base attributes, and counts 4x base effects in rooms. The enhanced flag is stored on that instance and survives saving/reloading.
+- Before each mutation the mod marks the native furniture list dirty, so the game rebuilds the list and attribute detail on the next frame instead of requiring furniture-mode or game re-entry.
 - Stored duplicates are consumed directly. Room furniture is identified from its native room field and all room materials are queued for native recall in the confirmation frame, before the modal focus change closes furniture mode.
 - After the batch confirmation closes, the mod scans and rebuilds the plan again so room-component changes during the dialog cannot leave stale work queued.
 - Special furniture that the game marks `can_be_rare false`, such as the Food Box, is never combined.
