@@ -38,6 +38,7 @@ std::atomic<bool> g_enabled{false};
 std::atomic<bool> g_busy{false};
 bool g_refresh_after_furniture_reentry{};
 bool g_furniture_exit_seen{};
+std::chrono::steady_clock::time_point g_refresh_not_before{};
 std::mutex g_log_mutex;
 cdf::FurnitureCatalog g_catalog;
 bool g_catalog_attempted{};
@@ -75,6 +76,7 @@ struct BatchState {
 BatchState g_batch;
 
 struct TransientMessage {
+    HWND owner{};
     std::wstring text;
     UINT icon{};
     DWORD timeout_ms{};
@@ -118,6 +120,31 @@ std::wstring Wide(std::string_view text) {
     return result;
 }
 
+BOOL CALLBACK FindGameWindowCallback(HWND window, LPARAM parameter) {
+    DWORD process_id{};
+    GetWindowThreadProcessId(window, &process_id);
+    if (process_id != GetCurrentProcessId() || !IsWindowVisible(window) ||
+        GetWindow(window, GW_OWNER) != nullptr) {
+        return TRUE;
+    }
+    *reinterpret_cast<HWND*>(parameter) = window;
+    return FALSE;
+}
+
+HWND GameWindow() {
+    const auto foreground = GetForegroundWindow();
+    DWORD process_id{};
+    if (foreground) {
+        GetWindowThreadProcessId(foreground, &process_id);
+        if (process_id == GetCurrentProcessId()) {
+            return foreground;
+        }
+    }
+    HWND window{};
+    EnumWindows(FindGameWindowCallback, reinterpret_cast<LPARAM>(&window));
+    return window;
+}
+
 void Log(std::string_view message) {
     if (g_mew_log) {
         g_mew_log(kOwner, "%s", std::string(message).c_str());
@@ -151,10 +178,10 @@ DWORD WINAPI TransientMessageThread(void* parameter) {
         : nullptr;
     if (show) {
         show(
-            nullptr,
+            message->owner,
             message->text.c_str(),
             DialogTitle(),
-            MB_OK | message->icon | MB_TOPMOST,
+            MB_OK | message->icon | MB_TOPMOST | MB_SETFOREGROUND,
             0,
             message->timeout_ms);
     } else {
@@ -169,7 +196,7 @@ void ShowTransient(
     UINT icon = MB_ICONINFORMATION,
     DWORD timeout_ms = 2500U) {
     auto* message = new (std::nothrow) TransientMessage{
-        Wide(text), icon, timeout_ms};
+        GameWindow(), Wide(text), icon, timeout_ms};
     if (!message) {
         return;
     }
@@ -377,6 +404,8 @@ void FinishBatch() {
     Log("batch complete pairs=" + std::to_string(completed));
     g_refresh_after_furniture_reentry = true;
     g_furniture_exit_seen = false;
+    g_refresh_not_before =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
     if (EnglishUi()) {
         ShowTransient(
             "Batch combine complete: " + std::to_string(completed) +
@@ -541,7 +570,7 @@ void HandleCombine(void* scene_manager) {
 
     Log("batch preview pairs=" + std::to_string(candidates.size()));
     const auto choice = MessageBoxW(
-        nullptr,
+        GameWindow(),
         Wide(BatchPreview(candidates)).c_str(),
         DialogTitle(),
         MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_SETFOREGROUND);
@@ -627,7 +656,9 @@ void __fastcall SceneReadyHook(void* scene_manager) {
     const bool furniture_mode_active =
         cdf::FurnitureModeActive(scene_manager);
     if (g_refresh_after_furniture_reentry) {
-        if (!furniture_mode_active) {
+        if (std::chrono::steady_clock::now() < g_refresh_not_before) {
+            g_furniture_exit_seen = false;
+        } else if (!furniture_mode_active) {
             g_furniture_exit_seen = true;
         } else if (g_furniture_exit_seen) {
             const auto furniture_ui = cdf::FindFurnitureUi(scene_manager);
