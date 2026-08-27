@@ -1,4 +1,5 @@
 #include "combine_duplicate_furniture/domain.hpp"
+#include "combine_duplicate_furniture/prompt_model.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -432,6 +433,36 @@ void DuplicateStableKeysAreRejected() {
     CHECK(cdf::FindCandidates(snapshot, Catalog()).empty());
 }
 
+void InGamePromptPaginationAndInput() {
+    using cdf::PromptAction;
+    cdf::PromptModel prompt{cdf::PromptLines("确认合并？\nNo changes until confirmation."), 0, true, false};
+    CHECK(prompt.Enter() == PromptAction::Cancel);
+    prompt.confirm_selected = true;
+    CHECK(prompt.Enter() == PromptAction::Confirm);
+    prompt.lines.assign(33, "家具 Furniture");
+    CHECK(prompt.PageCount() == 3);
+    prompt.TurnPage(-1);
+    CHECK(prompt.page == 0);
+    prompt.TurnPage(1);
+    prompt.TurnPage(1);
+    prompt.TurnPage(1);
+    CHECK(prompt.page == 2);
+    CHECK(cdf::PromptHit(950, 625, 1280, 720, true) == PromptAction::Confirm);
+    CHECK(cdf::PromptHit(1425, 937.5, 1920, 1080, true) == PromptAction::Confirm);
+    CHECK(cdf::PromptHit(990, 685, 1360, 840, true) == PromptAction::Confirm);
+    CHECK(cdf::PromptHit(760, 625, 1280, 720, true) == PromptAction::Cancel);
+    CHECK(cdf::PromptHit(10, 10, 1280, 720, true) == PromptAction::None);
+    CHECK(cdf::PromptHit(900, 430, 1280, 720, false) == PromptAction::Cancel);
+    CHECK(cdf::PromptHit(950, 625, 1280, 720, false) == PromptAction::None);
+    CHECK(cdf::PromptHit(950, 625, 0, 0, true) == PromptAction::None);
+    std::string chinese;
+    for (int i = 0; i < 80; ++i) chinese += "家";
+    const auto wrapped = cdf::PromptLines(chinese);
+    CHECK(wrapped.size() == 3);
+    CHECK(wrapped[0] + wrapped[1] + wrapped[2] == chinese);
+    CHECK(wrapped[0].size() == 36 * 3);
+}
+
 }  // namespace
 
 int main() {
@@ -460,7 +491,8 @@ int main() {
         {"enhanced failure", EnhancedConversionFailureLeavesBothRare},
         {"rare failure", RareConversionFailureLeavesBothOrdinary},
         {"delete pending", DeletePendingIsNotCandidate},
-        {"duplicate stable key", DuplicateStableKeysAreRejected}};
+        {"duplicate stable key", DuplicateStableKeysAreRejected},
+        {"in-game prompt", InGamePromptPaginationAndInput}};
     for (const auto& [name, test] : tests) {
         test();
         if (g_failures == 0) {
@@ -471,6 +503,6 @@ int main() {
         std::cerr << g_failures << " focused checks failed\n";
         return EXIT_FAILURE;
     }
-    std::cout << "All 25 focused checks passed\n";
+    std::cout << "All " << tests.size() << " focused checks passed\n";
     return EXIT_SUCCESS;
 }

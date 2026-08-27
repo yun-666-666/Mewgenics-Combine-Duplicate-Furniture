@@ -7,7 +7,7 @@ A Windows x64 Mewgenics mod that batch-combines duplicate furniture from the fur
 ## Features
 
 - Press `F8` in furniture mode to scan all deterministic pairs of identical furniture at the same rarity.
-- One confirmation dialog covers the entire batch.
+- One in-game confirmation panel covers the entire batch; no desktop window is opened. Long previews are paginated, and completion/error notices use a compact in-game panel.
 - Two ordinary copies become one native Rare item with 2x base attributes.
 - Two Rare copies become one persistent enhanced Rare item with 4x base attributes and room effects.
 - Furniture that the game marks as unable to become Rare, such as the Food Box, is skipped.
@@ -25,8 +25,11 @@ A Windows x64 Mewgenics mod that batch-combines duplicate furniture from the fur
    Mewgenics/
    ├─ Mods/CombineDuplicateFurniture.dll
    ├─ Mods/CombineDuplicateFurniture/config.json
-   └─ Mewtator/mods/CombineDuplicateFurniture/description.json
+   └─ Mewtator/mods/CombineDuplicateFurniture/
+      ├─ description.json
+      └─ swfs/ (cdf_prompt.swf and swflist.gon.append)
    ```
+5. Enable **Combine Duplicate Furniture** in Mewtator and launch through Mewtator so the game loads its UI assets.
 
 ## Language configuration
 
@@ -60,7 +63,7 @@ The supported values are `zh-CN` and `en-US`. The configuration is loaded when t
 
 1. Enter furniture mode.
 2. Press the configured hotkey (`F8` by default).
-3. Review the batch summary and confirm.
+3. Review the in-game batch summary and click **Combine** or **Cancel**. Use the page buttons, mouse wheel, or `PgUp`/`PgDn` for long previews; `Tab` selects the action, `Enter` activates it, and `Esc` cancels. Cancel is selected by default.
 4. Wait for the completion notice.
 5. Leave furniture mode and enter it again once. Consumed copies disappear and the kept items immediately show their new attributes.
 
@@ -74,11 +77,14 @@ Mods/CombineDuplicateFurniture/logs/CombineDuplicateFurniture.log
 
 This project was completed with GPT-5.6. Thank you to all Mewgenics players who tested the mod and shared their feedback.
 
+The in-game UI uses the native ABI and example SWF/font plumbing from Pseudonym_Tim's MIT-licensed [MewUI API](https://github.com/Pseudonym-Tim/mewgenics-ui-api). Its license accompanies the packaged assets.
+
 ## Building
 
 Run from PowerShell with Visual Studio 2022 and its C++/CMake tools installed:
 
 ```powershell
+git submodule update --init
 powershell -ExecutionPolicy Bypass -File tools/build.ps1 -Configuration Release
 ```
 
@@ -93,7 +99,7 @@ The release layout is generated under `dist/Release`.
 ## 功能
 
 - 在家具界面按 `F8`，扫描所有稀有度相同的同款家具并生成确定性的合并组合。
-- 整批操作只弹出一次确认窗口。
+- 整批操作只打开一次游戏内确认面板，不再弹出桌面窗口。长预览可翻页，完成和错误消息使用游戏内紧凑提示框。
 - 两件普通家具合并为一件原生 Rare 家具，基础属性为 2 倍。
 - 两件 Rare 家具合并为一件持久化的强化 Rare 家具，基础属性和房间效果为 4 倍。
 - 游戏标记为不能变成 Rare 的特殊家具（例如食物箱）不会参与合并。
@@ -111,8 +117,11 @@ The release layout is generated under `dist/Release`.
    Mewgenics/
    ├─ Mods/CombineDuplicateFurniture.dll
    ├─ Mods/CombineDuplicateFurniture/config.json
-   └─ Mewtator/mods/CombineDuplicateFurniture/description.json
+   └─ Mewtator/mods/CombineDuplicateFurniture/
+      ├─ description.json
+      └─ swfs/（cdf_prompt.swf 和 swflist.gon.append）
    ```
+5. 在 Mewtator 中启用 **Combine Duplicate Furniture** 并通过 Mewtator 启动，确保游戏加载提示框资源。
 
 ## 切换语言
 
@@ -146,7 +155,7 @@ Mods/CombineDuplicateFurniture/config.json
 
 1. 进入家具界面。
 2. 按配置的快捷键，默认是 `F8`。
-3. 查看批量合并摘要并确认。
+3. 在游戏内查看摘要，点击“开始合并”或“取消”。长预览可用翻页按钮、鼠标滚轮或 `PgUp` / `PgDn` 翻页；`Tab` 切换选项，`Enter` 执行选项，`Esc` 取消。默认选择“取消”。
 4. 等待完成提示。
 5. 退出家具界面并重新进入一次。多余家具会消失，保留家具会立即显示新的属性。
 
