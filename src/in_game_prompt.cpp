@@ -23,6 +23,22 @@ bool SetText(const char* name, const std::string& text) {
     return cdf_prompt_text(cdf_prompt_child(g_root, name), text.c_str()) != 0;
 }
 
+bool SetFrame(const char* name, int frame) {
+    return cdf_prompt_frame(cdf_prompt_child(g_root, name), frame) != 0;
+}
+
+bool ShowVisuals(bool confirmation) {
+    bool success = SetFrame("edge", 1) && SetFrame("paper", 1);
+    if (confirmation) {
+        success &= SetFrame("shade", 1) && SetFrame("rule", 1);
+        success &= SetFrame("prev", 1) && SetFrame("next", 1);
+        success &= SetFrame("cancel", 1) && SetFrame("yes", 1);
+    } else {
+        success &= SetFrame("cancel", 1);
+    }
+    return success;
+}
+
 bool Render() {
     bool success = true;
     for (std::size_t row = 0; row < g_model.PageSize(); ++row) {
@@ -31,7 +47,8 @@ bool Render() {
                            index < g_model.lines.size() ? g_model.lines[index] : "");
     }
     if (!g_model.confirmation) {
-        return SetText("cancel_txt", g_english ? "Close [Esc]" : "关闭 [Esc]") && success;
+        return SetText("cancel_txt", g_english ? "Close [Esc]" : "关闭 [Esc]") &&
+            success;
     }
     success &= SetText("page", (g_english ? "Page " : "第 ") +
         std::to_string(g_model.page + 1) + " / " + std::to_string(g_model.PageCount()) +
@@ -43,6 +60,8 @@ bool Render() {
         ? (g_english ? "Cancel" : "取消") : (g_english ? "[ Cancel ]" : "[ 取消 ]"));
     success &= SetText("yes_txt", g_model.confirm_selected
         ? (g_english ? "[ Combine ]" : "[ 开始合并 ]") : (g_english ? "Combine" : "开始合并"));
+    success &= SetFrame("cancel", g_model.confirm_selected ? 1 : 2);
+    success &= SetFrame("yes", g_model.confirm_selected ? 2 : 1);
     g_dirty = false;
     return success;
 }
@@ -95,6 +114,10 @@ bool ShowGamePrompt(void* scene, std::string title, std::string text,
     g_scene = scene;
     g_root = cdf_prompt_find(scene, &g_owner);
     if (!g_root || !cdf_prompt_frame(g_root, confirmation ? 1 : 2)) return false;
+    if (!ShowVisuals(confirmation)) {
+        cdf_prompt_frame(g_root, 0);
+        return false;
+    }
     g_model = {PromptLines(text), 0, confirmation, false};
     g_english = english;
     g_pending = g_pressed = PromptAction::None;
