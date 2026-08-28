@@ -1,3 +1,0 @@
-[submodule "third_party/mew_ui_api"]
-	path = third_party/mew_ui_api
-	url = https://github.com/Pseudonym-Tim/mewgenics-ui-api.git

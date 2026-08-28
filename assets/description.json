@@ -2,6 +2,6 @@
   "title": "Combine Duplicate Furniture",
   "description": "Press F8 in furniture mode to batch-combine identical furniture. Supports Chinese and English through the external config file; Chinese is the default.",
   "author": "OpenAI GPT-5",
-  "version": "0.7.2",
+  "version": "0.6.1",
   "requirements": []
 }

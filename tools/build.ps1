@@ -48,10 +48,6 @@ New-Item -ItemType Directory -Force -Path $mewtatorData | Out-Null
 Copy-Item -LiteralPath (Join-Path $buildDirectory "out\$Configuration\CombineDuplicateFurniture.dll") -Destination (Join-Path $dist 'Mods') -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'config\default_config.json') -Destination (Join-Path $runtimeData 'config.json') -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'assets\description.json') -Destination $mewtatorData -Force
-New-Item -ItemType Directory -Force -Path (Join-Path $mewtatorData 'swfs') | Out-Null
-Copy-Item -LiteralPath (Join-Path $buildDirectory 'generated\cdf_prompt.swf') -Destination (Join-Path $mewtatorData 'swfs') -Force
-Copy-Item -LiteralPath (Join-Path $projectRoot 'assets\swfs\swflist.gon.append') -Destination (Join-Path $mewtatorData 'swfs') -Force
-Copy-Item -LiteralPath (Join-Path $projectRoot 'third_party\mew_ui_api\LICENSE') -Destination (Join-Path $mewtatorData 'MewUI-LICENSE.txt') -Force
 
 $dumpbin = Get-ChildItem -LiteralPath $dumpbinRoot -Filter dumpbin.exe -Recurse |
     Where-Object FullName -Match '\\bin\\Hostx64\\x64\\dumpbin.exe$' |

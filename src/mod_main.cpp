@@ -1,8 +1,6 @@
 #include "combine_duplicate_furniture/catalog.hpp"
 #include "combine_duplicate_furniture/domain.hpp"
 #include "combine_duplicate_furniture/native_runtime.hpp"
-#include "in_game_prompt.hpp"
-#include "prompt_native.h"
 
 #include <windows.h>
 
@@ -14,6 +12,7 @@
 #include <iomanip>
 #include <map>
 #include <mutex>
+#include <new>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -58,10 +57,10 @@ bool EnglishUi() {
     return g_language == UiLanguage::English;
 }
 
-const char* DialogTitle() {
+const wchar_t* DialogTitle() {
     return EnglishUi()
-        ? "Combine Duplicate Furniture"
-        : "批量合并重复家具";
+        ? L"Combine Duplicate Furniture"
+        : L"批量合并重复家具";
 }
 
 std::string Localized(const char* chinese, const char* english) {
@@ -75,9 +74,13 @@ struct BatchState {
 };
 
 BatchState g_batch;
-void* g_batch_scene{};
-bool g_awaiting_confirmation{};
-std::size_t g_preview_pairs{};
+
+struct TransientMessage {
+    HWND owner{};
+    std::wstring text;
+    UINT icon{};
+    DWORD timeout_ms{};
+};
 
 std::filesystem::path ModulePath() {
     std::wstring buffer(32768, L'\0');
@@ -98,6 +101,48 @@ std::filesystem::path GameRoot() {
 std::filesystem::path DataRoot() {
     const auto module = ModulePath();
     return module.parent_path() / module.stem();
+}
+
+std::wstring Wide(std::string_view text) {
+    if (text.empty()) {
+        return {};
+    }
+    const auto count = MultiByteToWideChar(
+        CP_UTF8, 0, text.data(), static_cast<int>(text.size()),
+        nullptr, 0);
+    if (count <= 0) {
+        return std::wstring(text.begin(), text.end());
+    }
+    std::wstring result(static_cast<std::size_t>(count), L'\0');
+    MultiByteToWideChar(
+        CP_UTF8, 0, text.data(), static_cast<int>(text.size()),
+        result.data(), count);
+    return result;
+}
+
+BOOL CALLBACK FindGameWindowCallback(HWND window, LPARAM parameter) {
+    DWORD process_id{};
+    GetWindowThreadProcessId(window, &process_id);
+    if (process_id != GetCurrentProcessId() || !IsWindowVisible(window) ||
+        GetWindow(window, GW_OWNER) != nullptr) {
+        return TRUE;
+    }
+    *reinterpret_cast<HWND*>(parameter) = window;
+    return FALSE;
+}
+
+HWND GameWindow() {
+    const auto foreground = GetForegroundWindow();
+    DWORD process_id{};
+    if (foreground) {
+        GetWindowThreadProcessId(foreground, &process_id);
+        if (process_id == GetCurrentProcessId()) {
+            return foreground;
+        }
+    }
+    HWND window{};
+    EnumWindows(FindGameWindowCallback, reinterpret_cast<LPARAM>(&window));
+    return window;
 }
 
 void Log(std::string_view message) {
@@ -122,15 +167,46 @@ void Log(std::string_view message) {
            << " " << message << '\n';
 }
 
+DWORD WINAPI TransientMessageThread(void* parameter) {
+    auto* message = static_cast<TransientMessage*>(parameter);
+    using MessageBoxTimeoutFn = int (WINAPI*)(
+        HWND, LPCWSTR, LPCWSTR, UINT, WORD, DWORD);
+    const auto user32 = GetModuleHandleW(L"user32.dll");
+    const auto show = user32
+        ? reinterpret_cast<MessageBoxTimeoutFn>(
+              GetProcAddress(user32, "MessageBoxTimeoutW"))
+        : nullptr;
+    if (show) {
+        show(
+            message->owner,
+            message->text.c_str(),
+            DialogTitle(),
+            MB_OK | message->icon | MB_TOPMOST | MB_SETFOREGROUND,
+            0,
+            message->timeout_ms);
+    } else {
+        MessageBeep(message->icon);
+    }
+    delete message;
+    return 0;
+}
+
 void ShowTransient(
     std::string text,
-    bool error = false,
+    UINT icon = MB_ICONINFORMATION,
     DWORD timeout_ms = 2500U) {
-    const auto title = error
-        ? Localized("合并未完成", "Combine unavailable")
-        : Localized("家具合并提示", "Furniture combine");
-    if (!cdf::ShowGamePrompt(g_batch_scene, title, text, EnglishUi(), false, timeout_ms))
-        Log("in-game notification unavailable: " + text);
+    auto* message = new (std::nothrow) TransientMessage{
+        GameWindow(), Wide(text), icon, timeout_ms};
+    if (!message) {
+        return;
+    }
+    const auto thread = CreateThread(
+        nullptr, 0, TransientMessageThread, message, 0, nullptr);
+    if (!thread) {
+        delete message;
+        return;
+    }
+    CloseHandle(thread);
 }
 
 std::string BatchPreview(
@@ -278,9 +354,6 @@ void EnsureConfig() {
 void ClearBatch() {
     g_batch = {};
     g_busy = false;
-    g_awaiting_confirmation = false;
-    g_preview_pairs = 0;
-    g_batch_scene = nullptr;
 }
 
 void StopBatch(
@@ -307,7 +380,7 @@ void StopBatch(
                 std::to_string(g_batch.next_index) + " / " +
                 std::to_string(g_batch.candidates.size()) +
                 " pairs. See the mod log for details.",
-            true,
+            MB_ICONERROR,
             4000U);
     } else {
         ShowTransient(
@@ -315,7 +388,7 @@ void StopBatch(
                 std::to_string(g_batch.next_index) + " / " +
                 std::to_string(g_batch.candidates.size()) +
                 " 组。详情请查看 MOD 日志。",
-            true,
+            MB_ICONERROR,
             4000U);
     }
     ClearBatch();
@@ -339,14 +412,14 @@ void FinishBatch() {
                 " duplicate pairs combined (ordinary " +
                 std::to_string(ordinary_pairs) + ", Rare " +
                 std::to_string(rare_pairs) + ").",
-            false,
+            MB_ICONINFORMATION,
             2500U);
     } else {
         ShowTransient(
             "批量合并完成：已合并 " + std::to_string(completed) +
                 " 组重复家具（普通 " + std::to_string(ordinary_pairs) +
                 "，Rare " + std::to_string(rare_pairs) + "）。",
-            false,
+            MB_ICONINFORMATION,
             2500U);
     }
     ClearBatch();
@@ -439,7 +512,6 @@ void HandleCombine(void* scene_manager) {
     if (g_busy.exchange(true)) {
         return;
     }
-    g_batch_scene = scene_manager;
 
     if (!EnsureCatalog()) {
         ShowTransient(
@@ -447,7 +519,7 @@ void HandleCombine(void* scene_manager) {
                 "家具数据读取失败：\n",
                 "Failed to read furniture data:\n") +
                 g_catalog_error,
-            true,
+            MB_ICONERROR,
             4000U);
         ClearBatch();
         return;
@@ -481,7 +553,7 @@ void HandleCombine(void* scene_manager) {
             Localized(
                 "当前家具状态无法读取，未修改任何家具。",
                 "The current furniture state could not be read. No furniture was changed."),
-            true,
+            MB_ICONERROR,
             3500U);
         ClearBatch();
         return;
@@ -491,34 +563,29 @@ void HandleCombine(void* scene_manager) {
             Localized(
                 "没有可合并的相同普通或 Rare 家具。",
                 "No matching ordinary or Rare furniture can be combined."),
-            false);
+            MB_ICONINFORMATION);
         ClearBatch();
         return;
     }
 
     Log("batch preview pairs=" + std::to_string(candidates.size()));
-    if (!cdf::ShowGamePrompt(scene_manager, DialogTitle(), BatchPreview(candidates),
-                             EnglishUi(), true)) {
-        Log("in-game confirmation UI unavailable; no furniture changed");
+    const auto choice = MessageBoxW(
+        GameWindow(),
+        Wide(BatchPreview(candidates)).c_str(),
+        DialogTitle(),
+        MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_SETFOREGROUND);
+    if (choice != IDYES) {
+        Log("batch confirmation cancelled pairs=" +
+            std::to_string(candidates.size()));
         ClearBatch();
         return;
     }
-    g_awaiting_confirmation = true;
-    g_preview_pairs = candidates.size();
-}
 
-void ConfirmCombine(void* scene_manager) {
-    g_awaiting_confirmation = false;
-    if (!cdf::FurnitureModeActive(scene_manager)) {
-        Log("batch confirmation cancelled: furniture mode exited");
-        ClearBatch();
-        return;
-    }
-    cdf::NativeTransactionPort port(scene_manager);
+    const auto preview_pairs = candidates.size();
     const auto refreshed_snapshot = port.Scan();
-    auto candidates = cdf::FindCandidates(refreshed_snapshot, g_catalog);
+    candidates = cdf::FindCandidates(refreshed_snapshot, g_catalog);
     Log("batch refreshed preview_pairs=" +
-        std::to_string(g_preview_pairs) + " refreshed_pairs=" +
+        std::to_string(preview_pairs) + " refreshed_pairs=" +
         std::to_string(candidates.size()) + " total=" +
         std::to_string(refreshed_snapshot.furniture.size()) +
         " complete=" + std::to_string(refreshed_snapshot.complete));
@@ -527,7 +594,7 @@ void ConfirmCombine(void* scene_manager) {
             Localized(
                 "确认后家具状态无法重新读取，未修改任何家具。",
                 "The furniture state could not be read again after confirmation. No furniture was changed."),
-            true,
+            MB_ICONERROR,
             3500U);
         ClearBatch();
         return;
@@ -537,7 +604,7 @@ void ConfirmCombine(void* scene_manager) {
             Localized(
                 "确认后家具状态已变化，目前没有可合并的家具。",
                 "The furniture state changed after confirmation, and there are no longer any pairs to combine."),
-            false,
+            MB_ICONINFORMATION,
             3000U);
         ClearBatch();
         return;
@@ -580,26 +647,8 @@ void __fastcall SceneReadyHook(void* scene_manager) {
     if (!g_enabled || !scene_manager) {
         return;
     }
-    // Scene-ready runs for every scene; UI and batch work belong only to House.
-    const auto house = cdf_prompt_house();
-    if (!house) {
-        cdf::TickGamePrompt(nullptr);
-        if (g_busy) ClearBatch();
-        return;
-    }
-    if (scene_manager != house) return;
     EnsureConfig();
     EnsureCatalog();
-    const auto action = cdf::TickGamePrompt(house);
-    if (g_awaiting_confirmation) {
-        if (action == cdf::PromptAction::Confirm) ConfirmCombine(house);
-        else if (action == cdf::PromptAction::Cancel || !cdf::GamePromptVisible()) {
-            Log("batch confirmation cancelled pairs=" + std::to_string(g_preview_pairs));
-            ClearBatch();
-        }
-        return;
-    }
-    if (cdf::GamePromptVisible()) return;
     if (g_busy) {
         ProcessBatch(scene_manager);
         return;
@@ -650,7 +699,6 @@ bool ResolveAndHook() {
         }
         return false;
     }
-    if (!cdf_prompt_init()) return false;
     void* trampoline{};
     if (!install_hook(
             kSceneReadyUpdateRva,
@@ -682,7 +730,6 @@ int CombineDuplicateFurniture_Initialize() {
 extern "C" __declspec(dllexport)
 void CombineDuplicateFurniture_Shutdown() {
     g_enabled = false;
-    cdf::ShutdownGamePrompt();
 }
 
 BOOL WINAPI DllMain(HMODULE module, DWORD reason, LPVOID) {
