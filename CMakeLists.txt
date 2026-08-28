@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(CombineDuplicateFurniture VERSION 0.7.1 LANGUAGES C CXX)
+project(CombineDuplicateFurniture VERSION 0.7.2 LANGUAGES C CXX)
 
 if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "CombineDuplicateFurniture supports Windows x64 only.")
@@ -16,7 +16,6 @@ add_custom_command(
         "${CMAKE_SOURCE_DIR}/third_party/mew_ui_api/swfs/house_ui_test.swf"
         "${CDF_PROMPT_ASSET}"
     DEPENDS tools/build_prompt_asset.py tools/swf_frame_scripts.py
-        tools/swf_panel_shapes.py
         third_party/mew_ui_api/swfs/house_ui_test.swf
     VERBATIM
 )

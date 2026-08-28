@@ -28,9 +28,8 @@ bool SetFrame(const char* name, int frame) {
 }
 
 bool ShowVisuals(bool confirmation) {
-    bool success = SetFrame("edge", 1) && SetFrame("paper", 1);
+    bool success = SetFrame("edge", 1);
     if (confirmation) {
-        success &= SetFrame("shade", 1) && SetFrame("rule", 1);
         success &= SetFrame("prev", 1) && SetFrame("next", 1);
         success &= SetFrame("cancel", 1) && SetFrame("yes", 1);
     } else {
