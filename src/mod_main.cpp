@@ -45,6 +45,10 @@ bool g_catalog_attempted{};
 std::string g_catalog_error;
 bool g_config_loaded{};
 int g_hotkey{VK_F8};
+bool g_show_dialogs{};
+bool g_hotkey_down{};
+bool g_combine_requested{};
+std::chrono::steady_clock::time_point g_combine_request_deadline{};
 
 enum class UiLanguage {
     Chinese,
@@ -209,6 +213,15 @@ void ShowTransient(
     CloseHandle(thread);
 }
 
+void Notify(
+    std::string text,
+    UINT icon = MB_ICONINFORMATION,
+    DWORD timeout_ms = 2500U) {
+    if (g_show_dialogs) {
+        ShowTransient(std::move(text), icon, timeout_ms);
+    }
+}
+
 std::string BatchPreview(
     const std::vector<cdf::CombineCandidate>& candidates) {
     std::map<std::string, std::size_t> pair_counts;
@@ -349,6 +362,18 @@ void EnsureConfig() {
     }
     Log(std::string("config language=") +
         (EnglishUi() ? "en-US" : "zh-CN"));
+
+    std::smatch dialogs_match;
+    if (std::regex_search(
+            text, dialogs_match,
+            std::regex(R"cdf("show_dialogs"\s*:\s*(true|false))cdf",
+                       std::regex::icase))) {
+        const auto value = dialogs_match[1].str();
+        g_show_dialogs = !value.empty() &&
+            (value.front() == 't' || value.front() == 'T');
+    }
+    Log(std::string("config dialogs=") +
+        (g_show_dialogs ? "external" : "disabled"));
 }
 
 void ClearBatch() {
@@ -375,7 +400,7 @@ void StopBatch(
             << " exception_rva=0x" << failure.exception_rva;
     Log(message.str());
     if (EnglishUi()) {
-        ShowTransient(
+        Notify(
             "Batch combine stopped. Completed " +
                 std::to_string(g_batch.next_index) + " / " +
                 std::to_string(g_batch.candidates.size()) +
@@ -383,7 +408,7 @@ void StopBatch(
             MB_ICONERROR,
             4000U);
     } else {
-        ShowTransient(
+        Notify(
             "批量合并已停止。已完成 " +
                 std::to_string(g_batch.next_index) + " / " +
                 std::to_string(g_batch.candidates.size()) +
@@ -407,7 +432,7 @@ void FinishBatch() {
     g_refresh_not_before =
         std::chrono::steady_clock::now() + std::chrono::seconds(3);
     if (EnglishUi()) {
-        ShowTransient(
+        Notify(
             "Batch combine complete: " + std::to_string(completed) +
                 " duplicate pairs combined (ordinary " +
                 std::to_string(ordinary_pairs) + ", Rare " +
@@ -415,7 +440,7 @@ void FinishBatch() {
             MB_ICONINFORMATION,
             2500U);
     } else {
-        ShowTransient(
+        Notify(
             "批量合并完成：已合并 " + std::to_string(completed) +
                 " 组重复家具（普通 " + std::to_string(ordinary_pairs) +
                 "，Rare " + std::to_string(rare_pairs) + "）。",
@@ -514,7 +539,7 @@ void HandleCombine(void* scene_manager) {
     }
 
     if (!EnsureCatalog()) {
-        ShowTransient(
+        Notify(
             Localized(
                 "家具数据读取失败：\n",
                 "Failed to read furniture data:\n") +
@@ -549,7 +574,7 @@ void HandleCombine(void* scene_manager) {
         Log(message.str());
     }
     if (!snapshot.complete || !port.SignaturesValid()) {
-        ShowTransient(
+        Notify(
             Localized(
                 "当前家具状态无法读取，未修改任何家具。",
                 "The current furniture state could not be read. No furniture was changed."),
@@ -559,7 +584,7 @@ void HandleCombine(void* scene_manager) {
         return;
     }
     if (candidates.empty()) {
-        ShowTransient(
+        Notify(
             Localized(
                 "没有可合并的相同普通或 Rare 家具。",
                 "No matching ordinary or Rare furniture can be combined."),
@@ -569,16 +594,22 @@ void HandleCombine(void* scene_manager) {
     }
 
     Log("batch preview pairs=" + std::to_string(candidates.size()));
-    const auto choice = MessageBoxW(
-        GameWindow(),
-        Wide(BatchPreview(candidates)).c_str(),
-        DialogTitle(),
-        MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_SETFOREGROUND);
-    if (choice != IDYES) {
-        Log("batch confirmation cancelled pairs=" +
+    if (g_show_dialogs) {
+        const auto choice = MessageBoxW(
+            GameWindow(),
+            Wide(BatchPreview(candidates)).c_str(),
+            DialogTitle(),
+            MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2 |
+                MB_SETFOREGROUND);
+        if (choice != IDYES) {
+            Log("batch confirmation cancelled pairs=" +
+                std::to_string(candidates.size()));
+            ClearBatch();
+            return;
+        }
+    } else {
+        Log("batch confirmation skipped dialogs=disabled pairs=" +
             std::to_string(candidates.size()));
-        ClearBatch();
-        return;
     }
 
     const auto preview_pairs = candidates.size();
@@ -590,7 +621,7 @@ void HandleCombine(void* scene_manager) {
         std::to_string(refreshed_snapshot.furniture.size()) +
         " complete=" + std::to_string(refreshed_snapshot.complete));
     if (!refreshed_snapshot.complete || !port.SignaturesValid()) {
-        ShowTransient(
+        Notify(
             Localized(
                 "确认后家具状态无法重新读取，未修改任何家具。",
                 "The furniture state could not be read again after confirmation. No furniture was changed."),
@@ -600,7 +631,7 @@ void HandleCombine(void* scene_manager) {
         return;
     }
     if (candidates.empty()) {
-        ShowTransient(
+        Notify(
             Localized(
                 "确认后家具状态已变化，目前没有可合并的家具。",
                 "The furniture state changed after confirmation, and there are no longer any pairs to combine."),
@@ -648,9 +679,24 @@ void __fastcall SceneReadyHook(void* scene_manager) {
         return;
     }
     EnsureConfig();
-    EnsureCatalog();
+    const auto now = std::chrono::steady_clock::now();
+    const bool hotkey_down =
+        (GetAsyncKeyState(g_hotkey) & 0x8000) != 0;
+    if (hotkey_down && !g_hotkey_down && !g_busy) {
+        g_combine_requested = true;
+        g_combine_request_deadline = now + std::chrono::seconds(1);
+        Log("hotkey press captured");
+    } else if (!g_busy && g_combine_requested &&
+               now >= g_combine_request_deadline) {
+        g_combine_requested = false;
+        Log("hotkey request expired before furniture mode");
+    }
+    g_hotkey_down = hotkey_down;
     if (g_busy) {
         ProcessBatch(scene_manager);
+        return;
+    }
+    if (!g_combine_requested && !g_refresh_after_furniture_reentry) {
         return;
     }
     const bool furniture_mode_active =
@@ -674,7 +720,8 @@ void __fastcall SceneReadyHook(void* scene_manager) {
     if (!furniture_mode_active) {
         return;
     }
-    if ((GetAsyncKeyState(g_hotkey) & 1) != 0) {
+    if (g_combine_requested) {
+        g_combine_requested = false;
         HandleCombine(scene_manager);
     }
 }

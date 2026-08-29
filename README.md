@@ -7,7 +7,8 @@ A Windows x64 Mewgenics mod that batch-combines duplicate furniture from the fur
 ## Features
 
 - Press `F8` in furniture mode to scan all deterministic pairs of identical furniture at the same rarity.
-- One confirmation dialog covers the entire batch.
+- External dialogs are disabled by default, so `F8` starts the batch immediately without leaving the game window.
+- The known-stable external confirmation and status dialogs can be restored with `"show_dialogs": true`; the mod does not install a custom SWF or shared game-UI hook.
 - Two ordinary copies become one native Rare item with 2x base attributes.
 - Two Rare copies become one persistent enhanced Rare item with 4x base attributes and room effects.
 - Furniture that the game marks as unable to become Rare, such as the Food Box, is skipped.
@@ -28,9 +29,9 @@ A Windows x64 Mewgenics mod that batch-combines duplicate furniture from the fur
    └─ Mewtator/mods/CombineDuplicateFurniture/description.json
    ```
 
-## Language configuration
+## Configuration
 
-Language is changed outside the game. Close Mewgenics, open:
+Settings are changed outside the game. Close Mewgenics, open:
 
 ```text
 Mods/CombineDuplicateFurniture/config.json
@@ -41,7 +42,8 @@ Chinese is the default:
 ```json
 {
   "hotkey": "F8",
-  "language": "zh-CN"
+  "language": "zh-CN",
+  "show_dialogs": false
 }
 ```
 
@@ -50,19 +52,19 @@ For English, change only the language value:
 ```json
 {
   "hotkey": "F8",
-  "language": "en-US"
+  "language": "en-US",
+  "show_dialogs": false
 }
 ```
 
-The supported values are `zh-CN` and `en-US`. The configuration is loaded when the mod starts, so restart the game after editing it.
+The supported language values are `zh-CN` and `en-US`. With `show_dialogs` set to `false` or omitted, confirmation, completion, information, and error windows are suppressed and outcomes are written to the mod log. Set it to `true` only if you want the stable external dialogs back. The configuration is loaded when the mod starts, so restart the game after editing it.
 
 ## Usage
 
 1. Enter furniture mode.
 2. Press the configured hotkey (`F8` by default).
-3. Review the batch summary and confirm.
-4. Wait for the completion notice.
-5. Leave furniture mode and enter it again once. Consumed copies disappear and the kept items immediately show their new attributes.
+3. With the default configuration, the batch starts immediately and no window appears. Wait for processing to finish.
+4. Leave furniture mode and enter it again once. Consumed copies disappear and the kept items immediately show their new attributes.
 
 The log is written to:
 
@@ -93,7 +95,8 @@ The release layout is generated under `dist/Release`.
 ## 功能
 
 - 在家具界面按 `F8`，扫描所有稀有度相同的同款家具并生成确定性的合并组合。
-- 整批操作只弹出一次确认窗口。
+- 默认关闭所有外部弹窗；按下 `F8` 后直接开始整批操作，不会切出游戏窗口。
+- 如确实需要，可通过 `"show_dialogs": true` 恢复已知稳定的外部确认和状态窗口；本 MOD 不再安装自定义 SWF，也不再挂接共享游戏 UI。
 - 两件普通家具合并为一件原生 Rare 家具，基础属性为 2 倍。
 - 两件 Rare 家具合并为一件持久化的强化 Rare 家具，基础属性和房间效果为 4 倍。
 - 游戏标记为不能变成 Rare 的特殊家具（例如食物箱）不会参与合并。
@@ -114,9 +117,9 @@ The release layout is generated under `dist/Release`.
    └─ Mewtator/mods/CombineDuplicateFurniture/description.json
    ```
 
-## 切换语言
+## 配置
 
-语言不在游戏内切换。先退出游戏，然后打开：
+设置不在游戏内修改。先退出游戏，然后打开：
 
 ```text
 Mods/CombineDuplicateFurniture/config.json
@@ -127,7 +130,8 @@ Mods/CombineDuplicateFurniture/config.json
 ```json
 {
   "hotkey": "F8",
-  "language": "zh-CN"
+  "language": "zh-CN",
+  "show_dialogs": false
 }
 ```
 
@@ -136,19 +140,19 @@ Mods/CombineDuplicateFurniture/config.json
 ```json
 {
   "hotkey": "F8",
-  "language": "en-US"
+  "language": "en-US",
+  "show_dialogs": false
 }
 ```
 
-目前支持 `zh-CN` 和 `en-US`。配置会在 MOD 启动时读取，修改后重新启动游戏即可生效。
+语言目前支持 `zh-CN` 和 `en-US`。当 `show_dialogs` 为 `false` 或缺省时，确认、完成、普通信息和错误窗口都会关闭，结果只写入 MOD 日志；只有希望恢复稳定的游戏外弹窗时才设为 `true`。配置会在 MOD 启动时读取，修改后重新启动游戏即可生效。
 
 ## 使用方法
 
 1. 进入家具界面。
 2. 按配置的快捷键，默认是 `F8`。
-3. 查看批量合并摘要并确认。
-4. 等待完成提示。
-5. 退出家具界面并重新进入一次。多余家具会消失，保留家具会立即显示新的属性。
+3. 默认配置下会立即开始合并且不显示任何窗口，等待处理完成。
+4. 退出家具界面并重新进入一次。多余家具会消失，保留家具会立即显示新的属性。
 
 日志位置：
 

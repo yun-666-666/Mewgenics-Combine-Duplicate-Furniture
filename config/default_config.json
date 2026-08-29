@@ -1,4 +1,5 @@
 {
   "hotkey": "F8",
-  "language": "zh-CN"
+  "language": "zh-CN",
+  "show_dialogs": false
 }
