@@ -14,6 +14,7 @@
 #include <mutex>
 #include <new>
 #include <regex>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -27,6 +28,7 @@ constexpr UINT_PTR kSceneReadyUpdateRva = 0x962820;
 constexpr int kSceneReadyStolenBytes = 15;
 constexpr UINT_PTR kFurnitureModeEnterRva = 0x1AB940;
 constexpr int kFurnitureModeEnterStolenBytes = 15;
+constexpr auto kCurrentUiRefreshDelay = std::chrono::seconds(3);
 
 using InstallHookFn = int (__cdecl*)(
     UINT_PTR, int, void*, void**, int, const char*);
@@ -86,16 +88,11 @@ std::string Localized(const char* chinese, const char* english) {
 }
 
 struct BatchState {
-    enum class Stage {
-        AwaitingFurnitureExit,
-        ConfirmingFurnitureExit,
-        Executing,
-    };
-
     std::vector<cdf::CombineCandidate> candidates;
     std::size_t next_index{};
     std::vector<void*> pending_components;
-    Stage stage{Stage::AwaitingFurnitureExit};
+    std::chrono::steady_clock::time_point execute_not_before{};
+    bool pre_stored_any{};
 };
 
 BatchState g_batch;
@@ -316,13 +313,13 @@ std::string BatchPreview(
 
     if (EnglishUi()) {
         output << "\nThe enhanced Rare marker is stored on the kept item and remains 4x after saving and reloading.\n"
-               << "After confirming, leave furniture mode. The batch starts only after the furniture screen is fully closed.\n"
+               << "After confirming, keep furniture mode open. The batch runs and refreshes the current screen after three seconds.\n"
                << "Rare multipliers also increase negative attributes.\n\n"
                << "Special furniture that the game marks as unable to become Rare, such as the Food Box, is skipped.\n\n"
                << "Start batch combine?";
     } else {
         output << "\n强化 Rare 会在保留实例上写入持久标记，保存并重开后仍为基础数值 4 倍。\n"
-               << "确认后请退出家具界面；只有家具界面完全关闭后才会开始合并。\n"
+               << "确认后请保持家具界面打开；3 秒后会执行合并并刷新当前界面。\n"
                << "Rare 也会使负面属性翻倍。\n\n"
                << "游戏标记为不可 Rare 的特殊家具（例如食物箱）不会参与。\n\n"
                << "开始批量合并？";
@@ -409,6 +406,8 @@ std::string_view UiRebuildStatusName(
             return "not_attempted";
         case cdf::FurnitureUiRebuildStatus::Armed:
             return "armed";
+        case cdf::FurnitureUiRebuildStatus::Refreshed:
+            return "refreshed";
         case cdf::FurnitureUiRebuildStatus::EnterContextUnavailable:
             return "enter_context_unavailable";
         case cdf::FurnitureUiRebuildStatus::SignatureMismatch:
@@ -427,6 +426,8 @@ std::string_view UiRebuildStatusName(
             return "component_invalid";
         case cdf::FurnitureUiRebuildStatus::RowCacheUnreadable:
             return "row_cache_unreadable";
+        case cdf::FurnitureUiRebuildStatus::ModeInactive:
+            return "furniture_mode_inactive";
     }
     return "unknown";
 }
@@ -467,7 +468,52 @@ void LogDisplayAudit(void* scene_manager, std::string_view phase) {
     }
 }
 
+std::vector<std::uint64_t> CompletedUiRebuildKeys() {
+    std::vector<std::uint64_t> keys;
+    keys.reserve(g_batch.next_index);
+    for (std::size_t index = 0; index < g_batch.next_index; ++index) {
+        keys.push_back(g_batch.candidates[index].keep_key);
+    }
+    return keys;
+}
+
+bool RefreshCurrentFurnitureUi(
+    void* scene_manager,
+    std::span<const std::uint64_t> changed_keys,
+    std::string_view phase) {
+    std::vector<std::uint64_t> rebuild_keys = g_ui_rebuild_keys;
+    rebuild_keys.insert(
+        rebuild_keys.end(), changed_keys.begin(), changed_keys.end());
+    std::ranges::sort(rebuild_keys);
+    rebuild_keys.erase(
+        std::unique(rebuild_keys.begin(), rebuild_keys.end()),
+        rebuild_keys.end());
+
+    const auto rebuild = cdf::RefreshFurnitureUiNow(
+        scene_manager, rebuild_keys);
+    const bool refreshed =
+        rebuild.status == cdf::FurnitureUiRebuildStatus::Refreshed;
+    if (refreshed) {
+        g_ui_rebuild_pending = false;
+        g_ui_rebuild_keys.clear();
+    } else {
+        g_ui_rebuild_pending = true;
+        g_ui_rebuild_keys = std::move(rebuild_keys);
+    }
+    Log("furniture UI current refresh phase=" + std::string(phase) +
+        " refreshed=" + std::to_string(refreshed) + " status=" +
+        std::string(UiRebuildStatusName(rebuild.status)) +
+        " cached_rows_scanned=" +
+        std::to_string(rebuild.rows_scanned) +
+        " changed_rows_invalidated=" +
+        std::to_string(rebuild.rows_invalidated) +
+        " fallback_on_mode_enter=" +
+        std::to_string(g_ui_rebuild_pending));
+    return refreshed;
+}
+
 void StopBatch(
+    void* scene_manager,
     std::string_view stage,
     const cdf::CombineCandidate& candidate,
     const cdf::NativeFailure& failure,
@@ -485,6 +531,8 @@ void StopBatch(
             << " seh=0x" << std::hex << failure.seh_code
             << " exception_rva=0x" << failure.exception_rva;
     Log(message.str());
+    const auto changed_keys = CompletedUiRebuildKeys();
+    RefreshCurrentFurnitureUi(scene_manager, changed_keys, "batch_stop");
     if (EnglishUi()) {
         Notify(
             "Batch combine stopped. Completed " +
@@ -514,7 +562,6 @@ void FinishBatch(void* scene_manager) {
     }
     g_display_audit_targets.clear();
     g_display_audit_targets.reserve(g_batch.candidates.size());
-    g_ui_rebuild_keys.clear();
     for (const auto& candidate : g_batch.candidates) {
         g_display_audit_targets.push_back({
             candidate.keep_key,
@@ -523,22 +570,23 @@ void FinishBatch(void* scene_manager) {
                 (candidate.promote_to_rare
                     ? cdf::kRareFlag
                     : cdf::kEnhancedFlag)});
-        if (candidate.promote_to_rare || candidate.promote_to_enhanced) {
-            g_ui_rebuild_keys.push_back(candidate.keep_key);
-        }
     }
     g_display_audit_enter_logged = false;
     LogDisplayAudit(scene_manager, "batch_complete");
-    g_ui_rebuild_pending = true;
+    const auto changed_keys = CompletedUiRebuildKeys();
+    const bool refreshed = RefreshCurrentFurnitureUi(
+        scene_manager, changed_keys, "batch_complete");
     Log("batch complete pairs=" + std::to_string(completed) +
-        " ui_refresh_pending_on_mode_enter=1");
+        " current_ui_refreshed=" + std::to_string(refreshed));
     if (EnglishUi()) {
         Notify(
             "Batch combine complete: " + std::to_string(completed) +
                 " duplicate pairs combined (ordinary " +
                 std::to_string(ordinary_pairs) + ", Rare " +
                 std::to_string(rare_pairs) +
-                "). Re-enter furniture mode to view the updated items.",
+                (refreshed
+                    ? "). The current furniture screen has been refreshed."
+                    : "). Automatic refresh failed; re-enter furniture mode to view the updated items."),
             MB_ICONINFORMATION,
             2500U);
     } else {
@@ -546,7 +594,9 @@ void FinishBatch(void* scene_manager) {
             "批量合并完成：已合并 " + std::to_string(completed) +
                 " 组重复家具（普通 " + std::to_string(ordinary_pairs) +
                 "，Rare " + std::to_string(rare_pairs) +
-                "）。重新进入家具界面即可查看更新后的家具。",
+                (refreshed
+                    ? "）。当前家具界面已刷新。"
+                    : "）。自动刷新失败，请重新进入家具界面查看更新。"),
             MB_ICONINFORMATION,
             2500U);
     }
@@ -574,115 +624,117 @@ void ProcessBatch(void* scene_manager) {
 
     const bool furniture_mode_active =
         cdf::FurnitureModeActive(scene_manager);
-    if (g_batch.stage == BatchState::Stage::AwaitingFurnitureExit) {
-        if (furniture_mode_active) {
-            return;
+    if (!furniture_mode_active) {
+        if (g_batch.pre_stored_any) {
+            RefreshCurrentFurnitureUi(
+                scene_manager, {}, "furniture_mode_closed");
         }
-        g_batch.stage = BatchState::Stage::ConfirmingFurnitureExit;
-        Log("furniture mode exit observed; validating on next frame");
+        Log("batch cancelled because furniture mode closed before the 3-second refresh");
+        Notify(
+            Localized(
+                "家具界面在 3 秒刷新前已关闭，批量合并已取消；尚未合并的家具未被修改。",
+                "Furniture mode closed before the 3-second refresh. The batch was cancelled without combining the remaining furniture."),
+            MB_ICONINFORMATION,
+            3000U);
+        ClearBatch();
         return;
     }
-    if (g_batch.stage == BatchState::Stage::ConfirmingFurnitureExit) {
-        if (furniture_mode_active) {
-            g_batch.stage = BatchState::Stage::AwaitingFurnitureExit;
-            return;
-        }
-
-        cdf::NativeTransactionPort port(scene_manager);
-        const auto snapshot = port.Scan();
-        const auto refreshed = cdf::FindCandidates(snapshot, g_catalog);
-        const bool matches = snapshot.complete && port.SignaturesValid() &&
-            cdf::RemainingCandidatesMatch(
-                g_batch.candidates, g_batch.next_index, refreshed);
-        Log("batch exit validation completed=" +
-            std::to_string(g_batch.next_index) + " planned=" +
-            std::to_string(g_batch.candidates.size()) + " refreshed_pairs=" +
-            std::to_string(refreshed.size()) + " total=" +
-            std::to_string(snapshot.furniture.size()) + " complete=" +
-            std::to_string(snapshot.complete) + " matches=" +
-            std::to_string(matches));
-        if (!matches) {
-            Notify(
-                Localized(
-                    "退出家具界面后家具状态发生变化，批量合并已停止；尚未执行的家具未被修改。",
-                    "The furniture state changed after leaving furniture mode. The batch stopped without modifying the remaining pairs."),
-                MB_ICONERROR,
-                4000U);
-            ClearBatch();
-            return;
-        }
-        g_batch.stage = BatchState::Stage::Executing;
-        Log("batch execution armed outside furniture mode");
-        return;
-    }
-    if (furniture_mode_active) {
-        g_batch.stage = BatchState::Stage::AwaitingFurnitureExit;
-        Log("batch paused because furniture mode reopened");
+    if (std::chrono::steady_clock::now() < g_batch.execute_not_before) {
         return;
     }
 
-    if (g_batch.next_index >= g_batch.candidates.size()) {
-        FinishBatch(scene_manager);
+    cdf::NativeTransactionPort validation_port(scene_manager);
+    const auto snapshot = validation_port.Scan();
+    const auto refreshed = cdf::FindCandidates(snapshot, g_catalog);
+    const bool matches = snapshot.complete &&
+        validation_port.SignaturesValid() &&
+        cdf::RemainingCandidatesMatch(
+            g_batch.candidates, g_batch.next_index, refreshed);
+    Log("batch 3-second validation completed=" +
+        std::to_string(g_batch.next_index) + " planned=" +
+        std::to_string(g_batch.candidates.size()) + " refreshed_pairs=" +
+        std::to_string(refreshed.size()) + " total=" +
+        std::to_string(snapshot.furniture.size()) + " complete=" +
+        std::to_string(snapshot.complete) + " matches=" +
+        std::to_string(matches));
+    if (!matches) {
+        if (g_batch.pre_stored_any) {
+            RefreshCurrentFurnitureUi(
+                scene_manager, {}, "delay_validation_failed");
+        }
+        Notify(
+            Localized(
+                "等待 3 秒期间家具状态发生变化，批量合并已停止；尚未执行的家具未被修改。",
+                "The furniture state changed during the 3-second wait. The batch stopped without modifying the remaining pairs."),
+            MB_ICONERROR,
+            4000U);
+        ClearBatch();
         return;
     }
+    Log("batch execution armed in current furniture mode after 3 seconds");
 
-    const auto candidate = g_batch.candidates[g_batch.next_index];
     cdf::NativeTransactionPort port(scene_manager);
-    if (candidate.promote_to_rare && !port.SetRare(
-            candidate.keep_key,
-            candidate.item_id,
-            candidate.keep_flags)) {
-        StopBatch("set_rare", candidate, port.LastFailure());
-        return;
-    }
-    if (candidate.promote_to_enhanced && !port.SetEnhanced(
-            candidate.keep_key,
-            candidate.item_id,
-            candidate.keep_flags)) {
-        StopBatch("set_enhanced", candidate, port.LastFailure());
-        return;
-    }
-
-    if (!port.Consume(
-            candidate.consume_key,
-            candidate.item_id,
-            candidate.consume_flags)) {
-        const auto failure = port.LastFailure();
-        bool rollback{};
-        if (candidate.promote_to_rare) {
-            rollback = port.ClearRare(
-                candidate.keep_key, candidate.item_id);
-        } else if (candidate.promote_to_enhanced) {
-            rollback = port.ClearEnhanced(
-                candidate.keep_key, candidate.item_id);
+    while (g_batch.next_index < g_batch.candidates.size()) {
+        const auto candidate = g_batch.candidates[g_batch.next_index];
+        if (candidate.promote_to_rare && !port.SetRare(
+                candidate.keep_key,
+                candidate.item_id,
+                candidate.keep_flags)) {
+            StopBatch(
+                scene_manager, "set_rare", candidate, port.LastFailure());
+            return;
         }
-        StopBatch(
-            "consume",
-            candidate,
-            failure,
-            candidate.promote_to_rare || candidate.promote_to_enhanced,
-            rollback);
-        return;
-    }
+        if (candidate.promote_to_enhanced && !port.SetEnhanced(
+                candidate.keep_key,
+                candidate.item_id,
+                candidate.keep_flags)) {
+            StopBatch(
+                scene_manager,
+                "set_enhanced",
+                candidate,
+                port.LastFailure());
+            return;
+        }
 
-    ++g_batch.next_index;
-    {
-        std::ostringstream message;
-        message << "batch pair complete index=" << g_batch.next_index
-                << '/' << g_batch.candidates.size()
-                << " item=" << candidate.item_id
-                << " keep_key=" << candidate.keep_key
-                << " consume_key=" << candidate.consume_key
-                << " kind="
-                << (candidate.promote_to_rare ? "ordinary_to_rare" :
-                                                "rare_to_enhanced")
-                << " stored_from_room=" << candidate.consume_placed;
-        Log(message.str());
-    }
+        if (!port.Consume(
+                candidate.consume_key,
+                candidate.item_id,
+                candidate.consume_flags)) {
+            const auto failure = port.LastFailure();
+            bool rollback{};
+            if (candidate.promote_to_rare) {
+                rollback = port.ClearRare(
+                    candidate.keep_key, candidate.item_id);
+            } else if (candidate.promote_to_enhanced) {
+                rollback = port.ClearEnhanced(
+                    candidate.keep_key, candidate.item_id);
+            }
+            StopBatch(
+                scene_manager,
+                "consume",
+                candidate,
+                failure,
+                candidate.promote_to_rare || candidate.promote_to_enhanced,
+                rollback);
+            return;
+        }
 
-    if (g_batch.next_index == g_batch.candidates.size()) {
-        FinishBatch(scene_manager);
+        ++g_batch.next_index;
+        {
+            std::ostringstream message;
+            message << "batch pair complete index=" << g_batch.next_index
+                    << '/' << g_batch.candidates.size()
+                    << " item=" << candidate.item_id
+                    << " keep_key=" << candidate.keep_key
+                    << " consume_key=" << candidate.consume_key
+                    << " kind="
+                    << (candidate.promote_to_rare ? "ordinary_to_rare" :
+                                                    "rare_to_enhanced")
+                    << " stored_from_room=" << candidate.consume_placed;
+            Log(message.str());
+        }
     }
+    FinishBatch(scene_manager);
 }
 
 void HandleCombine(void* scene_manager) {
@@ -795,10 +847,11 @@ void HandleCombine(void* scene_manager) {
 
     g_batch.candidates = std::move(candidates);
     g_batch.next_index = 0;
-    g_batch.stage = BatchState::Stage::AwaitingFurnitureExit;
+    g_batch.execute_not_before =
+        std::chrono::steady_clock::now() + kCurrentUiRefreshDelay;
     Log("batch sealed pairs=" +
         std::to_string(g_batch.candidates.size()) +
-        "; waiting for furniture mode exit");
+        "; waiting 3 seconds before current-screen merge and refresh");
 
     std::size_t room_materials{};
     for (const auto& candidate : g_batch.candidates) {
@@ -812,9 +865,14 @@ void HandleCombine(void* scene_manager) {
             " success=" + std::to_string(stored) + " " +
             port.LastStoreProbeSummary());
         if (!stored) {
-            StopBatch("pre_store", candidate, port.LastFailure());
+            StopBatch(
+                scene_manager,
+                "pre_store",
+                candidate,
+                port.LastFailure());
             return;
         }
+        g_batch.pre_stored_any = true;
         g_batch.pending_components.push_back(
             port.LastStoredComponent());
         ++room_materials;

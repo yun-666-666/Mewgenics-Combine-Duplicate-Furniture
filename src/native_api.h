@@ -74,6 +74,7 @@ typedef struct CdfEnhancedPatchAudit {
 typedef enum CdfFurnitureUiRebuildStatus {
     CDF_FURNITURE_UI_REBUILD_NOT_ATTEMPTED = 0,
     CDF_FURNITURE_UI_REBUILD_ARMED = 1,
+    CDF_FURNITURE_UI_REBUILD_REFRESHED = 2,
     CDF_FURNITURE_UI_REBUILD_ENTER_CONTEXT_UNAVAILABLE = -1,
     CDF_FURNITURE_UI_REBUILD_SIGNATURE_MISMATCH = -2,
     CDF_FURNITURE_UI_REBUILD_COMPONENT_UNAVAILABLE = -3,
@@ -82,7 +83,8 @@ typedef enum CdfFurnitureUiRebuildStatus {
     CDF_FURNITURE_UI_REBUILD_WRITE_FAILED = -6,
     CDF_FURNITURE_UI_REBUILD_EXCEPTION = -7,
     CDF_FURNITURE_UI_REBUILD_COMPONENT_INVALID = -8,
-    CDF_FURNITURE_UI_REBUILD_ROW_CACHE_UNREADABLE = -9
+    CDF_FURNITURE_UI_REBUILD_ROW_CACHE_UNREADABLE = -9,
+    CDF_FURNITURE_UI_REBUILD_MODE_INACTIVE = -10
 } CdfFurnitureUiRebuildStatus;
 
 typedef struct CdfFurnitureUiRebuildResult {
@@ -95,6 +97,10 @@ int cdf_native_furniture_mode_active(void* scene_manager);
 int cdf_native_furniture_mode_enter_refresh_supported(void);
 CdfFurnitureUiRebuildResult cdf_native_prepare_furniture_ui_rebuild_on_enter(
     void* mode_enter_context,
+    const uint64_t* stale_row_keys,
+    size_t stale_row_key_count);
+CdfFurnitureUiRebuildResult cdf_native_refresh_furniture_ui_now(
+    void* scene_manager,
     const uint64_t* stale_row_keys,
     size_t stale_row_key_count);
 
