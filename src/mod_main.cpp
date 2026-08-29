@@ -423,14 +423,17 @@ void StopBatch(
     ClearBatch();
 }
 
-void FinishBatch() {
+void FinishBatch(void* scene_manager) {
     const auto completed = g_batch.next_index;
     std::size_t ordinary_pairs{};
     std::size_t rare_pairs{};
     for (const auto& candidate : g_batch.candidates) {
         candidate.promote_to_rare ? ++ordinary_pairs : ++rare_pairs;
     }
-    Log("batch complete pairs=" + std::to_string(completed));
+    const bool rebuild_queued =
+        cdf::QueueFurnitureUiRebuild(scene_manager);
+    Log("batch complete pairs=" + std::to_string(completed) +
+        " ui_rebuild_queued=" + std::to_string(rebuild_queued));
     if (EnglishUi()) {
         Notify(
             "Batch combine complete: " + std::to_string(completed) +
@@ -521,7 +524,7 @@ void ProcessBatch(void* scene_manager) {
     }
 
     if (g_batch.next_index >= g_batch.candidates.size()) {
-        FinishBatch();
+        FinishBatch(scene_manager);
         return;
     }
 
@@ -580,7 +583,7 @@ void ProcessBatch(void* scene_manager) {
     }
 
     if (g_batch.next_index == g_batch.candidates.size()) {
-        FinishBatch();
+        FinishBatch(scene_manager);
     }
 }
 
