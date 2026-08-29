@@ -64,6 +64,13 @@ typedef struct CdfNativeStoreResult {
     char after_room[CDF_NATIVE_TEXT_CAPACITY];
 } CdfNativeStoreResult;
 
+typedef struct CdfEnhancedPatchAudit {
+    uint8_t success;
+    uint32_t patched_mask;
+    uint32_t repaired_mask;
+    uint32_t conflict_mask;
+} CdfEnhancedPatchAudit;
+
 typedef enum CdfFurnitureUiRebuildStatus {
     CDF_FURNITURE_UI_REBUILD_NOT_ATTEMPTED = 0,
     CDF_FURNITURE_UI_REBUILD_ARMED = 1,
@@ -114,7 +121,7 @@ int cdf_native_scene_contains_component(
     void* scene_manager,
     const void* component);
 
-int cdf_native_install_enhanced_patches(void);
+CdfEnhancedPatchAudit cdf_native_ensure_enhanced_patches(void);
 
 #ifdef __cplusplus
 }

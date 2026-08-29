@@ -52,6 +52,16 @@ bool g_hotkey_down{};
 bool g_combine_requested{};
 std::chrono::steady_clock::time_point g_combine_request_deadline{};
 bool g_ui_rebuild_pending{};
+void* g_last_scene_manager{};
+
+struct DisplayAuditTarget {
+    std::uint64_t stable_key{};
+    std::string item_id;
+    std::uint64_t expected_flags{};
+};
+
+std::vector<DisplayAuditTarget> g_display_audit_targets;
+bool g_display_audit_enter_logged{};
 
 enum class UiLanguage {
     Chinese,
@@ -418,6 +428,42 @@ std::string_view UiRebuildStatusName(
     return "unknown";
 }
 
+std::string FormatPatchAudit(const cdf::EnhancedPatchAudit& audit) {
+    std::ostringstream output;
+    output << "patch_ok=" << audit.success
+           << " patched_mask=0x" << std::hex << audit.patched_mask
+           << " repaired_mask=0x" << audit.repaired_mask
+           << " conflict_mask=0x" << audit.conflict_mask;
+    return output.str();
+}
+
+void LogDisplayAudit(void* scene_manager, std::string_view phase) {
+    if (!scene_manager || g_display_audit_targets.empty()) {
+        return;
+    }
+    cdf::NativeTransactionPort port(scene_manager);
+    const auto snapshot = port.Scan();
+    for (const auto& target : g_display_audit_targets) {
+        const auto found = std::ranges::find_if(
+            snapshot.furniture,
+            [&target](const auto& item) {
+                return item.stable_key == target.stable_key &&
+                    item.item_id == target.item_id;
+            });
+        std::ostringstream message;
+        message << "display data audit phase=" << phase
+                << " item=" << target.item_id
+                << " key=" << target.stable_key
+                << " found=" << (found != snapshot.furniture.end())
+                << " expected_flags=0x" << std::hex
+                << target.expected_flags;
+        if (found != snapshot.furniture.end()) {
+            message << " actual_flags=0x" << found->placement_flags;
+        }
+        Log(message.str());
+    }
+}
+
 void StopBatch(
     std::string_view stage,
     const cdf::CombineCandidate& candidate,
@@ -456,13 +502,26 @@ void StopBatch(
     ClearBatch();
 }
 
-void FinishBatch() {
+void FinishBatch(void* scene_manager) {
     const auto completed = g_batch.next_index;
     std::size_t ordinary_pairs{};
     std::size_t rare_pairs{};
     for (const auto& candidate : g_batch.candidates) {
         candidate.promote_to_rare ? ++ordinary_pairs : ++rare_pairs;
     }
+    g_display_audit_targets.clear();
+    g_display_audit_targets.reserve(g_batch.candidates.size());
+    for (const auto& candidate : g_batch.candidates) {
+        g_display_audit_targets.push_back({
+            candidate.keep_key,
+            candidate.item_id,
+            candidate.keep_flags |
+                (candidate.promote_to_rare
+                    ? cdf::kRareFlag
+                    : cdf::kEnhancedFlag)});
+    }
+    g_display_audit_enter_logged = false;
+    LogDisplayAudit(scene_manager, "batch_complete");
     g_ui_rebuild_pending = true;
     Log("batch complete pairs=" + std::to_string(completed) +
         " ui_refresh_pending_on_mode_enter=1");
@@ -556,7 +615,7 @@ void ProcessBatch(void* scene_manager) {
     }
 
     if (g_batch.next_index >= g_batch.candidates.size()) {
-        FinishBatch();
+        FinishBatch(scene_manager);
         return;
     }
 
@@ -615,7 +674,7 @@ void ProcessBatch(void* scene_manager) {
     }
 
     if (g_batch.next_index == g_batch.candidates.size()) {
-        FinishBatch();
+        FinishBatch(scene_manager);
     }
 }
 
@@ -760,14 +819,24 @@ void HandleCombine(void* scene_manager) {
 }
 
 void* __fastcall FurnitureModeEnterHook(void* mode_enter_context) {
+    const auto patch_audit = cdf::EnsureEnhancedFurniturePatches();
+    if (!g_display_audit_enter_logged) {
+        LogDisplayAudit(g_last_scene_manager, "before_mode_rebuild");
+        g_display_audit_enter_logged = true;
+    }
     auto rebuild_status = cdf::FurnitureUiRebuildStatus::NotAttempted;
-    if (g_enabled && g_ui_rebuild_pending) {
+    if (g_enabled && g_ui_rebuild_pending && patch_audit.success) {
         rebuild_status =
             cdf::ArmFurnitureUiRebuildOnEnter(mode_enter_context);
     }
     void* result{};
     if (g_next_furniture_mode_enter) {
         result = g_next_furniture_mode_enter(mode_enter_context);
+    }
+    if (g_ui_rebuild_pending || patch_audit.repaired_mask != 0U ||
+        !patch_audit.success) {
+        Log("furniture mode enter enhanced patch audit " +
+            FormatPatchAudit(patch_audit));
     }
     if (rebuild_status != cdf::FurnitureUiRebuildStatus::NotAttempted) {
         const bool armed =
@@ -790,6 +859,7 @@ void __fastcall SceneReadyHook(void* scene_manager) {
     if (!g_enabled || !scene_manager) {
         return;
     }
+    g_last_scene_manager = scene_manager;
     EnsureConfig();
     const auto now = std::chrono::steady_clock::now();
     const bool hotkey_down =
@@ -844,9 +914,15 @@ bool ResolveAndHook() {
         }
         return false;
     }
-    if (!cdf::InstallEnhancedFurniturePatches()) {
+    const auto patch_audit = cdf::EnsureEnhancedFurniturePatches();
+    if (!patch_audit.success) {
         if (g_mew_log) {
-            g_mew_log(kOwner, "Enhanced furniture patch signatures do not match");
+            g_mew_log(
+                kOwner,
+                "Enhanced furniture patch signatures do not match; patched=0x%X repaired=0x%X conflict=0x%X",
+                patch_audit.patched_mask,
+                patch_audit.repaired_mask,
+                patch_audit.conflict_mask);
         }
         return false;
     }

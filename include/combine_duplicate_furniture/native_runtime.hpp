@@ -12,6 +12,13 @@ struct NativeFailure {
     std::uintptr_t exception_rva{};
 };
 
+struct EnhancedPatchAudit {
+    bool success{};
+    std::uint32_t patched_mask{};
+    std::uint32_t repaired_mask{};
+    std::uint32_t conflict_mask{};
+};
+
 enum class FurnitureUiRebuildStatus : int {
     NotAttempted = 0,
     Armed = 1,
@@ -72,6 +79,6 @@ private:
 [[nodiscard]] bool SceneContainsComponent(
     void* scene_manager,
     const void* component) noexcept;
-[[nodiscard]] bool InstallEnhancedFurniturePatches() noexcept;
+[[nodiscard]] EnhancedPatchAudit EnsureEnhancedFurniturePatches() noexcept;
 
 }  // namespace cdf

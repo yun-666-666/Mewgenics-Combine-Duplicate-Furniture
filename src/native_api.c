@@ -15,6 +15,8 @@ enum {
     CDF_FURNITURE_LIST_VALUE_FLAGS_2_RVA = 0x1A0097,
     CDF_FURNITURE_DETAIL_VALUE_FLAGS_1_RVA = 0x1A11F6,
     CDF_FURNITURE_DETAIL_VALUE_FLAGS_2_RVA = 0x1A1276,
+    CDF_FURNITURE_SORT_VALUE_FLAGS_1_RVA = 0x1A58AD,
+    CDF_FURNITURE_SORT_VALUE_FLAGS_2_RVA = 0x1A5922,
     CDF_FURNITURE_REBUILD_RVA = 0x1A5470,
     CDF_FURNITURE_MODE_ENTER_FUNCTION_RVA = 0x1AB940,
     CDF_FURNITURE_MODE_ENTER_REBUILD_RVA = 0x1AB95E,
@@ -782,8 +784,7 @@ CdfNativeStoreResult cdf_native_store(
     return result;
 }
 
-int cdf_native_install_enhanced_patches(void) {
-    static int installed;
+CdfEnhancedPatchAudit cdf_native_ensure_enhanced_patches(void) {
     static const uint8_t value_expected[] = {0x80, 0xE3, 0x01};
     static const uint8_t value_replacement[] = {0x80, 0xE3, 0x03};
     static const uint8_t count_expected[] = {
@@ -802,51 +803,86 @@ int cdf_native_install_enhanced_patches(void) {
         CDF_FURNITURE_LIST_VALUE_FLAGS_1_RVA,
         CDF_FURNITURE_LIST_VALUE_FLAGS_2_RVA,
         CDF_FURNITURE_DETAIL_VALUE_FLAGS_1_RVA,
-        CDF_FURNITURE_DETAIL_VALUE_FLAGS_2_RVA};
+        CDF_FURNITURE_DETAIL_VALUE_FLAGS_2_RVA,
+        CDF_FURNITURE_SORT_VALUE_FLAGS_1_RVA,
+        CDF_FURNITURE_SORT_VALUE_FLAGS_2_RVA};
+    CdfEnhancedPatchAudit result;
+    const uint32_t count_site_bit =
+        1U << (sizeof(value_rvas) / sizeof(value_rvas[0]));
+    const uint32_t all_sites_mask = (count_site_bit << 1U) - 1U;
     size_t index;
-    if (installed) {
-        return 1;
-    }
+    memset(&result, 0, sizeof(result));
     if (!executable || !cdf_signatures_valid()) {
-        return 0;
+        result.conflict_mask = all_sites_mask;
+        return result;
     }
     for (index = 0; index < sizeof(value_rvas) / sizeof(value_rvas[0]);
          ++index) {
-        if (!cdf_readable(
-                executable + value_rvas[index], sizeof(value_expected)) ||
-            memcmp(
-                executable + value_rvas[index],
-                value_expected,
-                sizeof(value_expected)) != 0) {
-            return 0;
+        const uint8_t* site = executable + value_rvas[index];
+        const uint32_t site_bit = 1U << index;
+        if (!cdf_readable(site, sizeof(value_expected)) ||
+            (memcmp(site, value_expected, sizeof(value_expected)) != 0 &&
+             memcmp(site, value_replacement, sizeof(value_replacement)) != 0)) {
+            result.conflict_mask |= site_bit;
         }
     }
-    if (!cdf_readable(
-            executable + CDF_FURNITURE_LIST_EFFECT_COUNT_RVA,
-            sizeof(count_expected)) ||
-        memcmp(
-            executable + CDF_FURNITURE_LIST_EFFECT_COUNT_RVA,
-            count_expected,
-            sizeof(count_expected)) != 0) {
-        return 0;
+    {
+        const uint8_t* count_site =
+            executable + CDF_FURNITURE_LIST_EFFECT_COUNT_RVA;
+        if (!cdf_readable(count_site, sizeof(count_expected)) ||
+            (memcmp(count_site, count_expected, sizeof(count_expected)) != 0 &&
+             memcmp(
+                 count_site,
+                 count_replacement,
+                 sizeof(count_replacement)) != 0)) {
+            result.conflict_mask |= count_site_bit;
+        }
+    }
+    if (result.conflict_mask != 0U) {
+        return result;
     }
     for (index = 0; index < sizeof(value_rvas) / sizeof(value_rvas[0]);
          ++index) {
-        if (!cdf_patch_bytes(
-                executable + value_rvas[index],
-                value_expected,
-                value_replacement,
-                sizeof(value_expected))) {
-            return 0;
+        uint8_t* site = executable + value_rvas[index];
+        const uint32_t site_bit = 1U << index;
+        if (memcmp(site, value_expected, sizeof(value_expected)) == 0) {
+            if (!cdf_patch_bytes(
+                    site,
+                    value_expected,
+                    value_replacement,
+                    sizeof(value_expected))) {
+                result.conflict_mask |= site_bit;
+                continue;
+            }
+            result.repaired_mask |= site_bit;
+        }
+        if (memcmp(site, value_replacement, sizeof(value_replacement)) == 0) {
+            result.patched_mask |= site_bit;
         }
     }
-    if (!cdf_patch_bytes(
-            executable + CDF_FURNITURE_LIST_EFFECT_COUNT_RVA,
-            count_expected,
-            count_replacement,
-            sizeof(count_expected))) {
-        return 0;
+    {
+        uint8_t* count_site =
+            executable + CDF_FURNITURE_LIST_EFFECT_COUNT_RVA;
+        if (memcmp(count_site, count_expected, sizeof(count_expected)) == 0) {
+            if (!cdf_patch_bytes(
+                    count_site,
+                    count_expected,
+                    count_replacement,
+                    sizeof(count_expected))) {
+                result.conflict_mask |= count_site_bit;
+            } else {
+                result.repaired_mask |= count_site_bit;
+            }
+        }
+        if (memcmp(
+                count_site,
+                count_replacement,
+                sizeof(count_replacement)) == 0) {
+            result.patched_mask |= count_site_bit;
+        }
     }
-    installed = 1;
-    return 1;
+    result.success = (uint8_t)(
+        result.conflict_mask == 0U &&
+        result.patched_mask == all_sites_mask);
+    return result;
 }

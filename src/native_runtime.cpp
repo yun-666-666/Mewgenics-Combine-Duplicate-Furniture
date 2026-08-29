@@ -188,8 +188,13 @@ bool SceneContainsComponent(
     return cdf_native_scene_contains_component(scene_manager, component) != 0;
 }
 
-bool InstallEnhancedFurniturePatches() noexcept {
-    return cdf_native_install_enhanced_patches() != 0;
+EnhancedPatchAudit EnsureEnhancedFurniturePatches() noexcept {
+    const auto audit = cdf_native_ensure_enhanced_patches();
+    return {
+        audit.success != 0,
+        audit.patched_mask,
+        audit.repaired_mask,
+        audit.conflict_mask};
 }
 
 }  // namespace cdf
