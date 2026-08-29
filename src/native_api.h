@@ -81,13 +81,22 @@ typedef enum CdfFurnitureUiRebuildStatus {
     CDF_FURNITURE_UI_REBUILD_MODE_ACTIVE = -5,
     CDF_FURNITURE_UI_REBUILD_WRITE_FAILED = -6,
     CDF_FURNITURE_UI_REBUILD_EXCEPTION = -7,
-    CDF_FURNITURE_UI_REBUILD_COMPONENT_INVALID = -8
+    CDF_FURNITURE_UI_REBUILD_COMPONENT_INVALID = -8,
+    CDF_FURNITURE_UI_REBUILD_ROW_CACHE_UNREADABLE = -9
 } CdfFurnitureUiRebuildStatus;
+
+typedef struct CdfFurnitureUiRebuildResult {
+    CdfFurnitureUiRebuildStatus status;
+    size_t rows_scanned;
+    size_t rows_invalidated;
+} CdfFurnitureUiRebuildResult;
 
 int cdf_native_furniture_mode_active(void* scene_manager);
 int cdf_native_furniture_mode_enter_refresh_supported(void);
-CdfFurnitureUiRebuildStatus cdf_native_arm_furniture_ui_rebuild_on_enter(
-    void* mode_enter_context);
+CdfFurnitureUiRebuildResult cdf_native_prepare_furniture_ui_rebuild_on_enter(
+    void* mode_enter_context,
+    const uint64_t* stale_row_keys,
+    size_t stale_row_key_count);
 
 CdfNativeScanResult cdf_native_scan(
     void* scene_manager,

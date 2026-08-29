@@ -52,6 +52,7 @@ bool g_hotkey_down{};
 bool g_combine_requested{};
 std::chrono::steady_clock::time_point g_combine_request_deadline{};
 bool g_ui_rebuild_pending{};
+std::vector<std::uint64_t> g_ui_rebuild_keys;
 void* g_last_scene_manager{};
 
 struct DisplayAuditTarget {
@@ -424,6 +425,8 @@ std::string_view UiRebuildStatusName(
             return "exception";
         case cdf::FurnitureUiRebuildStatus::ComponentInvalid:
             return "component_invalid";
+        case cdf::FurnitureUiRebuildStatus::RowCacheUnreadable:
+            return "row_cache_unreadable";
     }
     return "unknown";
 }
@@ -511,6 +514,7 @@ void FinishBatch(void* scene_manager) {
     }
     g_display_audit_targets.clear();
     g_display_audit_targets.reserve(g_batch.candidates.size());
+    g_ui_rebuild_keys.clear();
     for (const auto& candidate : g_batch.candidates) {
         g_display_audit_targets.push_back({
             candidate.keep_key,
@@ -519,6 +523,9 @@ void FinishBatch(void* scene_manager) {
                 (candidate.promote_to_rare
                     ? cdf::kRareFlag
                     : cdf::kEnhancedFlag)});
+        if (candidate.promote_to_enhanced) {
+            g_ui_rebuild_keys.push_back(candidate.keep_key);
+        }
     }
     g_display_audit_enter_logged = false;
     LogDisplayAudit(scene_manager, "batch_complete");
@@ -824,10 +831,10 @@ void* __fastcall FurnitureModeEnterHook(void* mode_enter_context) {
         LogDisplayAudit(g_last_scene_manager, "before_mode_rebuild");
         g_display_audit_enter_logged = true;
     }
-    auto rebuild_status = cdf::FurnitureUiRebuildStatus::NotAttempted;
+    cdf::FurnitureUiRebuildResult rebuild;
     if (g_enabled && g_ui_rebuild_pending && patch_audit.success) {
-        rebuild_status =
-            cdf::ArmFurnitureUiRebuildOnEnter(mode_enter_context);
+        rebuild = cdf::PrepareFurnitureUiRebuildOnEnter(
+            mode_enter_context, g_ui_rebuild_keys);
     }
     void* result{};
     if (g_next_furniture_mode_enter) {
@@ -838,15 +845,20 @@ void* __fastcall FurnitureModeEnterHook(void* mode_enter_context) {
         Log("furniture mode enter enhanced patch audit " +
             FormatPatchAudit(patch_audit));
     }
-    if (rebuild_status != cdf::FurnitureUiRebuildStatus::NotAttempted) {
+    if (rebuild.status != cdf::FurnitureUiRebuildStatus::NotAttempted) {
         const bool armed =
-            rebuild_status == cdf::FurnitureUiRebuildStatus::Armed;
+            rebuild.status == cdf::FurnitureUiRebuildStatus::Armed;
         if (armed) {
             g_ui_rebuild_pending = false;
+            g_ui_rebuild_keys.clear();
         }
         Log("furniture mode enter transition=0_to_1 ui_rebuild_armed=" +
             std::to_string(armed) + " status=" +
-            std::string(UiRebuildStatusName(rebuild_status)) +
+            std::string(UiRebuildStatusName(rebuild.status)) +
+            " cached_rows_scanned=" +
+            std::to_string(rebuild.rows_scanned) +
+            " enhanced_rows_invalidated=" +
+            std::to_string(rebuild.rows_invalidated) +
             " retry_pending=" + std::to_string(g_ui_rebuild_pending));
     }
     return result;
@@ -951,6 +963,7 @@ bool ResolveAndHook() {
     }
     g_next_scene_ready =
         reinterpret_cast<SceneReadyUpdateFn>(scene_ready_trampoline);
+
     g_enabled = true;
     if (g_mew_log) {
         g_mew_log(kOwner, "Loaded v%s; furniture-mode hotkey is F8", CDF_VERSION);

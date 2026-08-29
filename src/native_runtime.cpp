@@ -176,10 +176,17 @@ bool FurnitureModeEnterRefreshSupported() noexcept {
     return cdf_native_furniture_mode_enter_refresh_supported() != 0;
 }
 
-FurnitureUiRebuildStatus ArmFurnitureUiRebuildOnEnter(
-    void* mode_enter_context) noexcept {
-    return static_cast<FurnitureUiRebuildStatus>(
-        cdf_native_arm_furniture_ui_rebuild_on_enter(mode_enter_context));
+FurnitureUiRebuildResult PrepareFurnitureUiRebuildOnEnter(
+    void* mode_enter_context,
+    std::span<const std::uint64_t> stale_row_keys) noexcept {
+    const auto result = cdf_native_prepare_furniture_ui_rebuild_on_enter(
+        mode_enter_context,
+        stale_row_keys.data(),
+        stale_row_keys.size());
+    return {
+        static_cast<FurnitureUiRebuildStatus>(result.status),
+        result.rows_scanned,
+        result.rows_invalidated};
 }
 
 bool SceneContainsComponent(

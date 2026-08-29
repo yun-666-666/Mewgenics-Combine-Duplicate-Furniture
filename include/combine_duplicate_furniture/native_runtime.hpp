@@ -2,7 +2,9 @@
 
 #include "combine_duplicate_furniture/domain.hpp"
 
+#include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 
 namespace cdf {
@@ -30,6 +32,13 @@ enum class FurnitureUiRebuildStatus : int {
     WriteFailed = -6,
     Exception = -7,
     ComponentInvalid = -8,
+    RowCacheUnreadable = -9,
+};
+
+struct FurnitureUiRebuildResult {
+    FurnitureUiRebuildStatus status{FurnitureUiRebuildStatus::NotAttempted};
+    std::size_t rows_scanned{};
+    std::size_t rows_invalidated{};
 };
 
 class NativeTransactionPort final : public TransactionPort {
@@ -74,8 +83,9 @@ private:
 
 [[nodiscard]] bool FurnitureModeActive(void* scene_manager) noexcept;
 [[nodiscard]] bool FurnitureModeEnterRefreshSupported() noexcept;
-[[nodiscard]] FurnitureUiRebuildStatus ArmFurnitureUiRebuildOnEnter(
-    void* mode_enter_context) noexcept;
+[[nodiscard]] FurnitureUiRebuildResult PrepareFurnitureUiRebuildOnEnter(
+    void* mode_enter_context,
+    std::span<const std::uint64_t> stale_row_keys) noexcept;
 [[nodiscard]] bool SceneContainsComponent(
     void* scene_manager,
     const void* component) noexcept;

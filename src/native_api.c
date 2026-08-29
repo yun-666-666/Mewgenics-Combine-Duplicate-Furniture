@@ -18,6 +18,9 @@ enum {
     CDF_FURNITURE_SORT_VALUE_FLAGS_1_RVA = 0x1A58AD,
     CDF_FURNITURE_SORT_VALUE_FLAGS_2_RVA = 0x1A5922,
     CDF_FURNITURE_REBUILD_RVA = 0x1A5470,
+    CDF_FURNITURE_ROW_CACHE_RVA = 0x1A5D6C,
+    CDF_FURNITURE_ROW_KEY_ASSIGN_RVA = 0x1A0FC9,
+    CDF_FURNITURE_STALE_ROW_CLEANUP_RVA = 0x1A614A,
     CDF_FURNITURE_MODE_ENTER_FUNCTION_RVA = 0x1AB940,
     CDF_FURNITURE_MODE_ENTER_REBUILD_RVA = 0x1AB95E,
     CDF_FURNITURE_PIECE_VTABLE_RVA = 0xEDE690,
@@ -25,6 +28,13 @@ enum {
     CDF_SCENE_COMPONENT_LIST_OFFSET = 0x18,
     CDF_FURNITURE_REBUILD_DIRTY_OFFSET = 0x58,
     CDF_FURNITURE_MODE_ACTIVE_OFFSET = 0x78,
+    CDF_FURNITURE_UI_CONTEXT_OFFSET = 0x18,
+    CDF_FURNITURE_UI_ROOT_OFFSET = 0x08,
+    CDF_FURNITURE_UI_COMPONENT_TABLE_OFFSET = 0x20,
+    CDF_FURNITURE_ROW_COLLECTION_OFFSET = 0x3EF0,
+    CDF_FURNITURE_ROW_COLLECTION_COUNT_OFFSET = 0x0C,
+    CDF_FURNITURE_ROW_COLLECTION_DATA_OFFSET = 0x10,
+    CDF_FURNITURE_ROW_STABLE_KEY_OFFSET = 0x48,
     CDF_COMPONENT_CONTEXT_OFFSET = 0x18,
     CDF_CONTEXT_DELETE_STATE_OFFSET = 0x18,
     CDF_PIECE_GRID_OFFSET = 0x48,
@@ -209,6 +219,21 @@ static int cdf_furniture_rebuild_runtime_signatures_valid(void) {
         0x48, 0x8B, 0x79, 0x08,
         0x48, 0x8B, 0xCF,
         0xE8, 0x02, 0x9B, 0xFF, 0xFF};
+    static const uint8_t row_cache_signature[] = {
+        0x49, 0x8B, 0x46, 0x18,
+        0x48, 0x8B, 0x58, 0x08,
+        0xBA, 0xEF, 0x03, 0x00, 0x00,
+        0x48, 0x8B, 0xCB,
+        0xE8, 0xBF, 0xD2, 0x7B, 0x00,
+        0x48, 0x8B, 0x43, 0x20,
+        0x48, 0x8B, 0x88, 0xF0, 0x3E, 0x00, 0x00};
+    static const uint8_t row_key_signature[] = {
+        0x49, 0x89, 0x5E, 0x48};
+    static const uint8_t stale_row_cleanup_signature[] = {
+        0x48, 0x8B, 0x7C, 0x24, 0x28,
+        0x48, 0x8B, 0x1F,
+        0x48, 0x3B, 0xDF,
+        0x74, 0x16};
     const uint8_t* executable =
         (const uint8_t*)GetModuleHandleW(NULL);
     return executable &&
@@ -219,7 +244,19 @@ static int cdf_furniture_rebuild_runtime_signatures_valid(void) {
         cdf_signature(
             executable + CDF_FURNITURE_MODE_ENTER_REBUILD_RVA,
             mode_enter_signature,
-            sizeof(mode_enter_signature));
+            sizeof(mode_enter_signature)) &&
+        cdf_signature(
+            executable + CDF_FURNITURE_ROW_CACHE_RVA,
+            row_cache_signature,
+            sizeof(row_cache_signature)) &&
+        cdf_signature(
+            executable + CDF_FURNITURE_ROW_KEY_ASSIGN_RVA,
+            row_key_signature,
+            sizeof(row_key_signature)) &&
+        cdf_signature(
+            executable + CDF_FURNITURE_STALE_ROW_CLEANUP_RVA,
+            stale_row_cleanup_signature,
+            sizeof(stale_row_cleanup_signature));
 }
 
 static int cdf_furniture_mode_enter_hook_signature_valid(void) {
@@ -441,42 +478,161 @@ int cdf_native_furniture_mode_active(void* scene_manager) {
     }
 }
 
-CdfFurnitureUiRebuildStatus cdf_native_arm_furniture_ui_rebuild_on_enter(
-    void* mode_enter_context) {
+static int cdf_furniture_ui_rows(
+    void* component,
+    void*** rows,
+    uint32_t* count) {
+    void* context;
+    void* root;
+    void* table;
+    void* collection;
+    if (!component || !rows || !count || !cdf_readable(
+            component, CDF_FURNITURE_UI_CONTEXT_OFFSET + sizeof(void*))) {
+        return 0;
+    }
+    *rows = NULL;
+    *count = 0U;
+    __try {
+        context = *(void**)((uint8_t*)component +
+            CDF_FURNITURE_UI_CONTEXT_OFFSET);
+        if (!context) {
+            return 1;
+        }
+        if (!cdf_readable(context, CDF_FURNITURE_UI_ROOT_OFFSET +
+                sizeof(void*))) {
+            return 0;
+        }
+        root = *(void**)((uint8_t*)context + CDF_FURNITURE_UI_ROOT_OFFSET);
+        if (!root) {
+            return 1;
+        }
+        if (!cdf_readable(root, CDF_FURNITURE_UI_COMPONENT_TABLE_OFFSET +
+                sizeof(void*))) {
+            return 0;
+        }
+        table = *(void**)((uint8_t*)root +
+            CDF_FURNITURE_UI_COMPONENT_TABLE_OFFSET);
+        if (!table) {
+            return 1;
+        }
+        if (!cdf_readable(table,
+                CDF_FURNITURE_ROW_COLLECTION_OFFSET + sizeof(void*))) {
+            return 0;
+        }
+        collection = *(void**)((uint8_t*)table +
+            CDF_FURNITURE_ROW_COLLECTION_OFFSET);
+        if (!collection) {
+            return 1;
+        }
+        if (!cdf_readable(collection,
+                CDF_FURNITURE_ROW_COLLECTION_DATA_OFFSET + sizeof(void*))) {
+            return 0;
+        }
+        *count = *(uint32_t*)((uint8_t*)collection +
+            CDF_FURNITURE_ROW_COLLECTION_COUNT_OFFSET);
+        *rows = *(void***)((uint8_t*)collection +
+            CDF_FURNITURE_ROW_COLLECTION_DATA_OFFSET);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+    return *count <= 100000U &&
+        (*count == 0U || cdf_readable(
+            *rows, (size_t)*count * sizeof(void*)));
+}
+
+static int cdf_contains_stable_key(
+    const uint64_t* stable_keys,
+    size_t count,
+    uint64_t stable_key) {
+    size_t index;
+    for (index = 0; index < count; ++index) {
+        if (stable_keys[index] == stable_key) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+CdfFurnitureUiRebuildResult cdf_native_prepare_furniture_ui_rebuild_on_enter(
+    void* mode_enter_context,
+    const uint64_t* stale_row_keys,
+    size_t stale_row_key_count) {
+    CdfFurnitureUiRebuildResult result;
     void* component;
+    void** rows = NULL;
+    uint32_t row_count = 0U;
+    uint32_t index;
+    memset(&result, 0, sizeof(result));
     if (!mode_enter_context || !cdf_readable(
-            mode_enter_context, sizeof(void*) * 2U)) {
-        return CDF_FURNITURE_UI_REBUILD_ENTER_CONTEXT_UNAVAILABLE;
+            mode_enter_context, sizeof(void*) * 2U) ||
+        (stale_row_key_count != 0U && !stale_row_keys)) {
+        result.status = CDF_FURNITURE_UI_REBUILD_ENTER_CONTEXT_UNAVAILABLE;
+        return result;
     }
     if (!cdf_furniture_rebuild_runtime_signatures_valid()) {
-        return CDF_FURNITURE_UI_REBUILD_SIGNATURE_MISMATCH;
+        result.status = CDF_FURNITURE_UI_REBUILD_SIGNATURE_MISMATCH;
+        return result;
     }
     __try {
         component = *(void**)((uint8_t*)mode_enter_context + sizeof(void*));
         if (!component) {
-            return CDF_FURNITURE_UI_REBUILD_COMPONENT_UNAVAILABLE;
+            result.status = CDF_FURNITURE_UI_REBUILD_COMPONENT_UNAVAILABLE;
+            return result;
         }
         if (!cdf_valid_vtable(
                 component, CDF_FURNITURE_BUILDING_UI_VTABLE_RVA)) {
-            return CDF_FURNITURE_UI_REBUILD_COMPONENT_INVALID;
+            result.status = CDF_FURNITURE_UI_REBUILD_COMPONENT_INVALID;
+            return result;
         }
         if (!cdf_readable(
                 component, CDF_FURNITURE_MODE_ACTIVE_OFFSET + 1U)) {
-            return CDF_FURNITURE_UI_REBUILD_COMPONENT_UNREADABLE;
+            result.status = CDF_FURNITURE_UI_REBUILD_COMPONENT_UNREADABLE;
+            return result;
         }
         if (*(uint8_t*)((uint8_t*)component +
                 CDF_FURNITURE_MODE_ACTIVE_OFFSET) != 0U) {
-            return CDF_FURNITURE_UI_REBUILD_MODE_ACTIVE;
+            result.status = CDF_FURNITURE_UI_REBUILD_MODE_ACTIVE;
+            return result;
         }
         *(uint8_t*)((uint8_t*)component +
             CDF_FURNITURE_REBUILD_DIRTY_OFFSET) = 1U;
-        return *(uint8_t*)((uint8_t*)component +
-                CDF_FURNITURE_REBUILD_DIRTY_OFFSET) != 0U
-            ? CDF_FURNITURE_UI_REBUILD_ARMED
-            : CDF_FURNITURE_UI_REBUILD_WRITE_FAILED;
+        if (*(uint8_t*)((uint8_t*)component +
+                CDF_FURNITURE_REBUILD_DIRTY_OFFSET) == 0U) {
+            result.status = CDF_FURNITURE_UI_REBUILD_WRITE_FAILED;
+            return result;
+        }
+        if (stale_row_key_count != 0U &&
+            !cdf_furniture_ui_rows(component, &rows, &row_count)) {
+            result.status = CDF_FURNITURE_UI_REBUILD_ROW_CACHE_UNREADABLE;
+            return result;
+        }
+        result.rows_scanned = row_count;
+        for (index = 0; index < row_count; ++index) {
+            void* row = rows[index];
+            uint64_t stable_key;
+            if (!cdf_readable(
+                    row, CDF_FURNITURE_ROW_STABLE_KEY_OFFSET +
+                        sizeof(uint64_t))) {
+                result.status = CDF_FURNITURE_UI_REBUILD_ROW_CACHE_UNREADABLE;
+                return result;
+            }
+            stable_key = *(uint64_t*)((uint8_t*)row +
+                CDF_FURNITURE_ROW_STABLE_KEY_OFFSET);
+            if (cdf_contains_stable_key(
+                    stale_row_keys, stale_row_key_count, stable_key)) {
+                *(uint64_t*)((uint8_t*)row +
+                    CDF_FURNITURE_ROW_STABLE_KEY_OFFSET) =
+                    stable_key ^ (1ULL << 63U);
+                ++result.rows_invalidated;
+            }
+        }
+        result.status = CDF_FURNITURE_UI_REBUILD_ARMED;
+        return result;
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
-        return CDF_FURNITURE_UI_REBUILD_EXCEPTION;
+        result.status = CDF_FURNITURE_UI_REBUILD_EXCEPTION;
+        return result;
     }
 }
 
