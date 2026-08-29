@@ -16,6 +16,7 @@
 #include <regex>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -46,6 +47,9 @@ bool g_show_dialogs{};
 bool g_hotkey_down{};
 bool g_combine_requested{};
 std::chrono::steady_clock::time_point g_combine_request_deadline{};
+bool g_ui_rebuild_pending{};
+cdf::FurnitureUiRebuildStatus g_last_ui_rebuild_status{
+    cdf::FurnitureUiRebuildStatus::NotAttempted};
 
 enum class UiLanguage {
     Chinese,
@@ -385,6 +389,50 @@ void ClearBatch() {
     g_busy = false;
 }
 
+std::string_view UiRebuildStatusName(
+    cdf::FurnitureUiRebuildStatus status) {
+    switch (status) {
+        case cdf::FurnitureUiRebuildStatus::NotAttempted:
+            return "not_attempted";
+        case cdf::FurnitureUiRebuildStatus::Queued:
+            return "queued";
+        case cdf::FurnitureUiRebuildStatus::SceneUnavailable:
+            return "scene_unavailable";
+        case cdf::FurnitureUiRebuildStatus::SignatureMismatch:
+            return "signature_mismatch";
+        case cdf::FurnitureUiRebuildStatus::ComponentUnavailable:
+            return "component_unavailable";
+        case cdf::FurnitureUiRebuildStatus::ComponentUnreadable:
+            return "component_unreadable";
+        case cdf::FurnitureUiRebuildStatus::ModeActive:
+            return "furniture_mode_active";
+        case cdf::FurnitureUiRebuildStatus::WriteFailed:
+            return "dirty_flag_write_failed";
+        case cdf::FurnitureUiRebuildStatus::Exception:
+            return "exception";
+    }
+    return "unknown";
+}
+
+void RetryFurnitureUiRebuild(void* scene_manager) {
+    if (!g_ui_rebuild_pending) {
+        return;
+    }
+    const auto status = cdf::QueueFurnitureUiRebuild(scene_manager);
+    if (status == cdf::FurnitureUiRebuildStatus::Queued) {
+        g_ui_rebuild_pending = false;
+        g_last_ui_rebuild_status = status;
+        Log("furniture UI rebuild queued before mode re-entry "
+            "ui_rebuild_queued=1");
+        return;
+    }
+    if (status != g_last_ui_rebuild_status) {
+        g_last_ui_rebuild_status = status;
+        Log("furniture UI rebuild still pending reason=" +
+            std::string(UiRebuildStatusName(status)));
+    }
+}
+
 void StopBatch(
     std::string_view stage,
     const cdf::CombineCandidate& candidate,
@@ -430,10 +478,17 @@ void FinishBatch(void* scene_manager) {
     for (const auto& candidate : g_batch.candidates) {
         candidate.promote_to_rare ? ++ordinary_pairs : ++rare_pairs;
     }
-    const bool rebuild_queued =
+    const auto rebuild_status =
         cdf::QueueFurnitureUiRebuild(scene_manager);
+    const bool rebuild_queued =
+        rebuild_status == cdf::FurnitureUiRebuildStatus::Queued;
+    g_ui_rebuild_pending = !rebuild_queued;
+    g_last_ui_rebuild_status = rebuild_status;
     Log("batch complete pairs=" + std::to_string(completed) +
-        " ui_rebuild_queued=" + std::to_string(rebuild_queued));
+        " ui_rebuild_queued=" + std::to_string(rebuild_queued) +
+        " ui_rebuild_status=" +
+        std::string(UiRebuildStatusName(rebuild_status)) +
+        " retry_pending=" + std::to_string(g_ui_rebuild_pending));
     if (EnglishUi()) {
         Notify(
             "Batch combine complete: " + std::to_string(completed) +
@@ -728,6 +783,9 @@ void HandleCombine(void* scene_manager) {
 }
 
 void __fastcall SceneReadyHook(void* scene_manager) {
+    if (g_enabled && scene_manager && g_ui_rebuild_pending) {
+        RetryFurnitureUiRebuild(scene_manager);
+    }
     if (g_next_scene_ready) {
         g_next_scene_ready(scene_manager);
     }

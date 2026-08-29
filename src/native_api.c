@@ -423,28 +423,37 @@ int cdf_native_furniture_mode_active(void* scene_manager) {
     }
 }
 
-int cdf_native_queue_furniture_ui_rebuild(void* scene_manager) {
+CdfFurnitureUiRebuildStatus cdf_native_queue_furniture_ui_rebuild(
+    void* scene_manager) {
     void* component;
-    if (!scene_manager || !cdf_furniture_rebuild_signatures_valid()) {
-        return 0;
+    if (!scene_manager) {
+        return CDF_FURNITURE_UI_REBUILD_SCENE_UNAVAILABLE;
+    }
+    if (!cdf_furniture_rebuild_signatures_valid()) {
+        return CDF_FURNITURE_UI_REBUILD_SIGNATURE_MISMATCH;
     }
     component = cdf_find_furniture_ui(scene_manager);
-    if (!component || !cdf_readable(
+    if (!component) {
+        return CDF_FURNITURE_UI_REBUILD_COMPONENT_UNAVAILABLE;
+    }
+    if (!cdf_readable(
             component, CDF_FURNITURE_MODE_ACTIVE_OFFSET + 1U)) {
-        return 0;
+        return CDF_FURNITURE_UI_REBUILD_COMPONENT_UNREADABLE;
     }
     __try {
         if (*(uint8_t*)((uint8_t*)component +
                 CDF_FURNITURE_MODE_ACTIVE_OFFSET) != 0U) {
-            return 0;
+            return CDF_FURNITURE_UI_REBUILD_MODE_ACTIVE;
         }
         *(uint8_t*)((uint8_t*)component +
             CDF_FURNITURE_REBUILD_DIRTY_OFFSET) = 1U;
         return *(uint8_t*)((uint8_t*)component +
-            CDF_FURNITURE_REBUILD_DIRTY_OFFSET) != 0U;
+                CDF_FURNITURE_REBUILD_DIRTY_OFFSET) != 0U
+            ? CDF_FURNITURE_UI_REBUILD_QUEUED
+            : CDF_FURNITURE_UI_REBUILD_WRITE_FAILED;
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
+        return CDF_FURNITURE_UI_REBUILD_EXCEPTION;
     }
 }
 

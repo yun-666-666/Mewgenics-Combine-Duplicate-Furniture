@@ -12,6 +12,18 @@ struct NativeFailure {
     std::uintptr_t exception_rva{};
 };
 
+enum class FurnitureUiRebuildStatus : int {
+    NotAttempted = 0,
+    Queued = 1,
+    SceneUnavailable = -1,
+    SignatureMismatch = -2,
+    ComponentUnavailable = -3,
+    ComponentUnreadable = -4,
+    ModeActive = -5,
+    WriteFailed = -6,
+    Exception = -7,
+};
+
 class NativeTransactionPort final : public TransactionPort {
 public:
     explicit NativeTransactionPort(void* scene_manager) noexcept;
@@ -53,7 +65,8 @@ private:
 };
 
 [[nodiscard]] bool FurnitureModeActive(void* scene_manager) noexcept;
-[[nodiscard]] bool QueueFurnitureUiRebuild(void* scene_manager) noexcept;
+[[nodiscard]] FurnitureUiRebuildStatus QueueFurnitureUiRebuild(
+    void* scene_manager) noexcept;
 [[nodiscard]] bool SceneContainsComponent(
     void* scene_manager,
     const void* component) noexcept;

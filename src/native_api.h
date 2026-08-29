@@ -64,8 +64,21 @@ typedef struct CdfNativeStoreResult {
     char after_room[CDF_NATIVE_TEXT_CAPACITY];
 } CdfNativeStoreResult;
 
+typedef enum CdfFurnitureUiRebuildStatus {
+    CDF_FURNITURE_UI_REBUILD_NOT_ATTEMPTED = 0,
+    CDF_FURNITURE_UI_REBUILD_QUEUED = 1,
+    CDF_FURNITURE_UI_REBUILD_SCENE_UNAVAILABLE = -1,
+    CDF_FURNITURE_UI_REBUILD_SIGNATURE_MISMATCH = -2,
+    CDF_FURNITURE_UI_REBUILD_COMPONENT_UNAVAILABLE = -3,
+    CDF_FURNITURE_UI_REBUILD_COMPONENT_UNREADABLE = -4,
+    CDF_FURNITURE_UI_REBUILD_MODE_ACTIVE = -5,
+    CDF_FURNITURE_UI_REBUILD_WRITE_FAILED = -6,
+    CDF_FURNITURE_UI_REBUILD_EXCEPTION = -7
+} CdfFurnitureUiRebuildStatus;
+
 int cdf_native_furniture_mode_active(void* scene_manager);
-int cdf_native_queue_furniture_ui_rebuild(void* scene_manager);
+CdfFurnitureUiRebuildStatus cdf_native_queue_furniture_ui_rebuild(
+    void* scene_manager);
 
 CdfNativeScanResult cdf_native_scan(
     void* scene_manager,
