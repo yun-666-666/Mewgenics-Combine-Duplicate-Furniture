@@ -18,7 +18,6 @@ enum {
     CDF_FURNITURE_PIECE_VTABLE_RVA = 0xEDE690,
     CDF_FURNITURE_BUILDING_UI_VTABLE_RVA = 0xF082A8,
     CDF_SCENE_COMPONENT_LIST_OFFSET = 0x18,
-    CDF_FURNITURE_LIST_DIRTY_OFFSET = 0x58,
     CDF_FURNITURE_MODE_ACTIVE_OFFSET = 0x78,
     CDF_COMPONENT_CONTEXT_OFFSET = 0x18,
     CDF_CONTEXT_DELETE_STATE_OFFSET = 0x18,
@@ -367,7 +366,7 @@ static void* cdf_find_piece(
     return found;
 }
 
-void* cdf_native_find_furniture_ui(void* scene_manager) {
+static void* cdf_find_furniture_ui(void* scene_manager) {
     void** components;
     uint32_t count;
     uint32_t index;
@@ -385,7 +384,7 @@ void* cdf_native_find_furniture_ui(void* scene_manager) {
 }
 
 int cdf_native_furniture_mode_active(void* scene_manager) {
-    void* component = cdf_native_find_furniture_ui(scene_manager);
+    void* component = cdf_find_furniture_ui(scene_manager);
     if (!component || !cdf_readable(
             component, CDF_FURNITURE_MODE_ACTIVE_OFFSET + 1U)) {
         return 0;
@@ -393,21 +392,6 @@ int cdf_native_furniture_mode_active(void* scene_manager) {
     __try {
         return *(uint8_t*)((uint8_t*)component +
             CDF_FURNITURE_MODE_ACTIVE_OFFSET) != 0U;
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
-    }
-}
-
-int cdf_native_request_furniture_ui_refresh(void* furniture_ui) {
-    if (!furniture_ui) {
-        return 0;
-    }
-    __try {
-        *(uint8_t*)((uint8_t*)furniture_ui +
-            CDF_FURNITURE_LIST_DIRTY_OFFSET) = 1U;
-        return *(uint8_t*)((uint8_t*)furniture_ui +
-            CDF_FURNITURE_LIST_DIRTY_OFFSET) != 0U;
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;

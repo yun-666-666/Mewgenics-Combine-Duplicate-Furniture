@@ -6,13 +6,13 @@ A Windows x64 Mewgenics mod that batch-combines duplicate furniture from the fur
 
 ## Features
 
-- Press `F8` in furniture mode to scan all deterministic pairs of identical furniture at the same rarity.
-- External dialogs are disabled by default, so `F8` starts the batch immediately without leaving the game window.
+- Press `F8` in furniture mode to seal all deterministic pairs of identical furniture at the same rarity.
+- External dialogs are disabled by default, so `F8` seals the batch immediately without leaving the game window.
 - The known-stable external confirmation and status dialogs can be restored with `"show_dialogs": true`; the mod does not install a custom SWF or shared game-UI hook.
 - Two ordinary copies become one native Rare item with 2x base attributes.
 - Two Rare copies become one persistent enhanced Rare item with 4x base attributes and room effects.
 - Furniture that the game marks as unable to become Rare, such as the Food Box, is skipped.
-- The active furniture list is not rebuilt during the batch. Leave furniture mode and enter it again once to remove consumed copies and refresh the kept items' attributes without restarting the game.
+- No furniture is modified while the furniture screen is active. Leave furniture mode after pressing `F8`; the batch is revalidated and executed only after the screen is fully closed, so reopening it creates a fresh list with the updated attributes.
 - The hotkey can be changed to `F1`-`F12` in the external configuration file.
 
 ## Installation
@@ -63,8 +63,8 @@ The supported language values are `zh-CN` and `en-US`. With `show_dialogs` set t
 
 1. Enter furniture mode.
 2. Press the configured hotkey (`F8` by default).
-3. With the default configuration, the batch starts immediately and no window appears. Wait for processing to finish.
-4. Leave furniture mode and enter it again once. Consumed copies disappear and the kept items immediately show their new attributes.
+3. With the default configuration, no window appears. Leave furniture mode to let the sealed batch start safely.
+4. Wait briefly for the batch to finish, then enter furniture mode again. Consumed copies are gone and the kept items are rebuilt with their new attributes.
 
 The log is written to:
 
@@ -94,13 +94,13 @@ The release layout is generated under `dist/Release`.
 
 ## 功能
 
-- 在家具界面按 `F8`，扫描所有稀有度相同的同款家具并生成确定性的合并组合。
-- 默认关闭所有外部弹窗；按下 `F8` 后直接开始整批操作，不会切出游戏窗口。
+- 在家具界面按 `F8`，扫描所有稀有度相同的同款家具并封存确定性的合并组合。
+- 默认关闭所有外部弹窗；按下 `F8` 后只封存批次，不会切出游戏窗口。
 - 如确实需要，可通过 `"show_dialogs": true` 恢复已知稳定的外部确认和状态窗口；本 MOD 不再安装自定义 SWF，也不再挂接共享游戏 UI。
 - 两件普通家具合并为一件原生 Rare 家具，基础属性为 2 倍。
 - 两件 Rare 家具合并为一件持久化的强化 Rare 家具，基础属性和房间效果为 4 倍。
 - 游戏标记为不能变成 Rare 的特殊家具（例如食物箱）不会参与合并。
-- 合并过程中不会强制重建当前家具列表。合并完成后退出家具界面并重新进入一次，多余家具会消失，保留家具会立即显示新属性，无需重启游戏。
+- 家具界面仍打开时不会修改任何家具。按 `F8` 后先退出家具界面，MOD 会在界面完全关闭后重新核对并执行批次；再次进入时，游戏会用新数据重建家具列表并显示新属性。
 - 可以在游戏外的配置文件中把快捷键改为 `F1` 至 `F12`。
 
 ## 安装
@@ -151,8 +151,8 @@ Mods/CombineDuplicateFurniture/config.json
 
 1. 进入家具界面。
 2. 按配置的快捷键，默认是 `F8`。
-3. 默认配置下会立即开始合并且不显示任何窗口，等待处理完成。
-4. 退出家具界面并重新进入一次。多余家具会消失，保留家具会立即显示新的属性。
+3. 默认配置下不会显示任何窗口。按键后退出家具界面，让已封存的批次安全开始执行。
+4. 稍等批次完成，再重新进入家具界面。多余家具会消失，保留家具会显示新的属性。
 
 日志位置：
 

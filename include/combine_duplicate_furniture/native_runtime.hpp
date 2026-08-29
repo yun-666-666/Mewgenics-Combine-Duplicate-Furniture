@@ -53,8 +53,6 @@ private:
 };
 
 [[nodiscard]] bool FurnitureModeActive(void* scene_manager) noexcept;
-[[nodiscard]] void* FindFurnitureUi(void* scene_manager) noexcept;
-[[nodiscard]] bool RequestFurnitureUiRefresh(void* furniture_ui) noexcept;
 [[nodiscard]] bool SceneContainsComponent(
     void* scene_manager,
     const void* component) noexcept;

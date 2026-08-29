@@ -80,6 +80,11 @@ struct CombineCandidate {
     const ScanSnapshot& snapshot,
     const FurnitureCatalog& catalog);
 
+[[nodiscard]] bool RemainingCandidatesMatch(
+    const std::vector<CombineCandidate>& sealed,
+    std::size_t completed,
+    const std::vector<CombineCandidate>& refreshed);
+
 enum class ExecuteStatus {
     Success,
     PreconditionFailed,

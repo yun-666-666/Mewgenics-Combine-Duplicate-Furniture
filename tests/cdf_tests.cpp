@@ -299,6 +299,31 @@ void CandidateOrderIsDeterministic() {
     CHECK(candidates[1].item_id == "table");
 }
 
+void SealedBatchRequiresSameStoredMaterials() {
+    auto sealed = cdf::FindCandidates(
+        Snapshot({
+            Item(1),
+            Item(2),
+            Item(3, "table", 0, false, 1),
+            Item(4, "table", 0, false, 1)}),
+        Catalog());
+    CHECK(sealed.size() == 2);
+
+    const auto refreshed = cdf::FindCandidates(
+        Snapshot({Item(1), Item(2), Item(3, "table"), Item(4, "table")}),
+        Catalog());
+    CHECK(cdf::RemainingCandidatesMatch(sealed, 0, refreshed));
+    CHECK(cdf::RemainingCandidatesMatch(sealed, 1, {refreshed[1]}));
+
+    auto still_placed = refreshed;
+    still_placed[1].consume_placed = true;
+    CHECK(!cdf::RemainingCandidatesMatch(sealed, 0, still_placed));
+
+    auto changed = refreshed;
+    changed[1].consume_key = 99;
+    CHECK(!cdf::RemainingCandidatesMatch(sealed, 0, changed));
+}
+
 void FridgePreviewAttributesDouble() {
     const auto catalog = Catalog();
     const auto rare = catalog.at("set_90s_frige").attributes.Rare();
@@ -450,6 +475,7 @@ int main() {
         {"enhanced not recombined", EnhancedFurnitureDoesNotCombineAgain},
         {"unknown flags", UnknownPlacementFlagDoesNotCombine},
         {"deterministic order", CandidateOrderIsDeterministic},
+        {"sealed batch", SealedBatchRequiresSameStoredMaterials},
         {"fridge preview", FridgePreviewAttributesDouble},
         {"negative attributes", NegativeAttributesDouble},
         {"one group", OneExecutionConsumesOnlyOneGroup},
@@ -471,6 +497,6 @@ int main() {
         std::cerr << g_failures << " focused checks failed\n";
         return EXIT_FAILURE;
     }
-    std::cout << "All 25 focused checks passed\n";
+    std::cout << "All 26 focused checks passed\n";
     return EXIT_SUCCESS;
 }

@@ -126,6 +126,31 @@ std::vector<CombineCandidate> FindCandidates(
     return result;
 }
 
+bool RemainingCandidatesMatch(
+    const std::vector<CombineCandidate>& sealed,
+    std::size_t completed,
+    const std::vector<CombineCandidate>& refreshed) {
+    if (completed > sealed.size() ||
+        sealed.size() - completed != refreshed.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < refreshed.size(); ++index) {
+        const auto& expected = sealed[completed + index];
+        const auto& actual = refreshed[index];
+        if (actual.consume_placed ||
+            expected.item_id != actual.item_id ||
+            expected.keep_key != actual.keep_key ||
+            expected.consume_key != actual.consume_key ||
+            expected.keep_flags != actual.keep_flags ||
+            expected.consume_flags != actual.consume_flags ||
+            expected.promote_to_rare != actual.promote_to_rare ||
+            expected.promote_to_enhanced != actual.promote_to_enhanced) {
+            return false;
+        }
+    }
+    return true;
+}
+
 namespace {
 
 const FurnitureInstance* FindUnique(

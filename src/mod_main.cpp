@@ -36,9 +36,6 @@ SceneReadyUpdateFn g_next_scene_ready{};
 MewLogFn g_mew_log{};
 std::atomic<bool> g_enabled{false};
 std::atomic<bool> g_busy{false};
-bool g_refresh_after_furniture_reentry{};
-bool g_furniture_exit_seen{};
-std::chrono::steady_clock::time_point g_refresh_not_before{};
 std::mutex g_log_mutex;
 cdf::FurnitureCatalog g_catalog;
 bool g_catalog_attempted{};
@@ -72,9 +69,16 @@ std::string Localized(const char* chinese, const char* english) {
 }
 
 struct BatchState {
+    enum class Stage {
+        AwaitingFurnitureExit,
+        ConfirmingFurnitureExit,
+        Executing,
+    };
+
     std::vector<cdf::CombineCandidate> candidates;
     std::size_t next_index{};
     std::vector<void*> pending_components;
+    Stage stage{Stage::AwaitingFurnitureExit};
 };
 
 BatchState g_batch;
@@ -295,13 +299,13 @@ std::string BatchPreview(
 
     if (EnglishUi()) {
         output << "\nThe enhanced Rare marker is stored on the kept item and remains 4x after saving and reloading.\n"
-               << "The batch is processed across consecutive game frames, and the completion notice closes automatically.\n"
+               << "After confirming, leave furniture mode. The batch starts only after the furniture screen is fully closed.\n"
                << "Rare multipliers also increase negative attributes.\n\n"
                << "Special furniture that the game marks as unable to become Rare, such as the Food Box, is skipped.\n\n"
                << "Start batch combine?";
     } else {
         output << "\n强化 Rare 会在保留实例上写入持久标记，保存并重开后仍为基础数值 4 倍。\n"
-               << "合并会分散到连续游戏帧执行，完成提示会自动消失。\n"
+               << "确认后请退出家具界面；只有家具界面完全关闭后才会开始合并。\n"
                << "Rare 也会使负面属性翻倍。\n\n"
                << "游戏标记为不可 Rare 的特殊家具（例如食物箱）不会参与。\n\n"
                << "开始批量合并？";
@@ -427,23 +431,21 @@ void FinishBatch() {
         candidate.promote_to_rare ? ++ordinary_pairs : ++rare_pairs;
     }
     Log("batch complete pairs=" + std::to_string(completed));
-    g_refresh_after_furniture_reentry = true;
-    g_furniture_exit_seen = false;
-    g_refresh_not_before =
-        std::chrono::steady_clock::now() + std::chrono::seconds(3);
     if (EnglishUi()) {
         Notify(
             "Batch combine complete: " + std::to_string(completed) +
                 " duplicate pairs combined (ordinary " +
                 std::to_string(ordinary_pairs) + ", Rare " +
-                std::to_string(rare_pairs) + ").",
+                std::to_string(rare_pairs) +
+                "). Re-enter furniture mode to view the updated items.",
             MB_ICONINFORMATION,
             2500U);
     } else {
         Notify(
             "批量合并完成：已合并 " + std::to_string(completed) +
                 " 组重复家具（普通 " + std::to_string(ordinary_pairs) +
-                "，Rare " + std::to_string(rare_pairs) + "）。",
+                "，Rare " + std::to_string(rare_pairs) +
+                "）。重新进入家具界面即可查看更新后的家具。",
             MB_ICONINFORMATION,
             2500U);
     }
@@ -466,6 +468,55 @@ void ProcessBatch(void* scene_manager) {
             return;
         }
         Log("room furniture pre-store complete");
+        return;
+    }
+
+    const bool furniture_mode_active =
+        cdf::FurnitureModeActive(scene_manager);
+    if (g_batch.stage == BatchState::Stage::AwaitingFurnitureExit) {
+        if (furniture_mode_active) {
+            return;
+        }
+        g_batch.stage = BatchState::Stage::ConfirmingFurnitureExit;
+        Log("furniture mode exit observed; validating on next frame");
+        return;
+    }
+    if (g_batch.stage == BatchState::Stage::ConfirmingFurnitureExit) {
+        if (furniture_mode_active) {
+            g_batch.stage = BatchState::Stage::AwaitingFurnitureExit;
+            return;
+        }
+
+        cdf::NativeTransactionPort port(scene_manager);
+        const auto snapshot = port.Scan();
+        const auto refreshed = cdf::FindCandidates(snapshot, g_catalog);
+        const bool matches = snapshot.complete && port.SignaturesValid() &&
+            cdf::RemainingCandidatesMatch(
+                g_batch.candidates, g_batch.next_index, refreshed);
+        Log("batch exit validation completed=" +
+            std::to_string(g_batch.next_index) + " planned=" +
+            std::to_string(g_batch.candidates.size()) + " refreshed_pairs=" +
+            std::to_string(refreshed.size()) + " total=" +
+            std::to_string(snapshot.furniture.size()) + " complete=" +
+            std::to_string(snapshot.complete) + " matches=" +
+            std::to_string(matches));
+        if (!matches) {
+            Notify(
+                Localized(
+                    "退出家具界面后家具状态发生变化，批量合并已停止；尚未执行的家具未被修改。",
+                    "The furniture state changed after leaving furniture mode. The batch stopped without modifying the remaining pairs."),
+                MB_ICONERROR,
+                4000U);
+            ClearBatch();
+            return;
+        }
+        g_batch.stage = BatchState::Stage::Executing;
+        Log("batch execution armed outside furniture mode");
+        return;
+    }
+    if (furniture_mode_active) {
+        g_batch.stage = BatchState::Stage::AwaitingFurnitureExit;
+        Log("batch paused because furniture mode reopened");
         return;
     }
 
@@ -643,8 +694,10 @@ void HandleCombine(void* scene_manager) {
 
     g_batch.candidates = std::move(candidates);
     g_batch.next_index = 0;
-    Log("batch started pairs=" +
-        std::to_string(g_batch.candidates.size()));
+    g_batch.stage = BatchState::Stage::AwaitingFurnitureExit;
+    Log("batch sealed pairs=" +
+        std::to_string(g_batch.candidates.size()) +
+        "; waiting for furniture mode exit");
 
     std::size_t room_materials{};
     for (const auto& candidate : g_batch.candidates) {
@@ -696,27 +749,11 @@ void __fastcall SceneReadyHook(void* scene_manager) {
         ProcessBatch(scene_manager);
         return;
     }
-    if (!g_combine_requested && !g_refresh_after_furniture_reentry) {
+    if (!g_combine_requested) {
         return;
     }
     const bool furniture_mode_active =
         cdf::FurnitureModeActive(scene_manager);
-    if (g_refresh_after_furniture_reentry) {
-        if (std::chrono::steady_clock::now() < g_refresh_not_before) {
-            g_furniture_exit_seen = false;
-        } else if (!furniture_mode_active) {
-            g_furniture_exit_seen = true;
-        } else if (g_furniture_exit_seen) {
-            const auto furniture_ui = cdf::FindFurnitureUi(scene_manager);
-            if (furniture_ui &&
-                cdf::RequestFurnitureUiRefresh(furniture_ui)) {
-                Log("furniture UI refresh requested after mode re-entry");
-                g_refresh_after_furniture_reentry = false;
-                g_furniture_exit_seen = false;
-                return;
-            }
-        }
-    }
     if (!furniture_mode_active) {
         return;
     }

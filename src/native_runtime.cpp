@@ -172,14 +172,6 @@ bool FurnitureModeActive(void* scene_manager) noexcept {
     return cdf_native_furniture_mode_active(scene_manager) != 0;
 }
 
-void* FindFurnitureUi(void* scene_manager) noexcept {
-    return cdf_native_find_furniture_ui(scene_manager);
-}
-
-bool RequestFurnitureUiRefresh(void* furniture_ui) noexcept {
-    return cdf_native_request_furniture_ui_refresh(furniture_ui) != 0;
-}
-
 bool SceneContainsComponent(
     void* scene_manager,
     const void* component) noexcept {
