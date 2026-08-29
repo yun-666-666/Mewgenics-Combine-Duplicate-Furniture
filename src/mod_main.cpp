@@ -25,15 +25,19 @@ namespace {
 constexpr auto kOwner = "CombineDuplicateFurniture";
 constexpr UINT_PTR kSceneReadyUpdateRva = 0x962820;
 constexpr int kSceneReadyStolenBytes = 15;
+constexpr UINT_PTR kFurnitureModeEnterRva = 0x1AB940;
+constexpr int kFurnitureModeEnterStolenBytes = 15;
 
 using InstallHookFn = int (__cdecl*)(
     UINT_PTR, int, void*, void**, int, const char*);
 using MewLogFn = void (__cdecl*)(const char*, const char*, ...);
 using GetVersionFn = int (__cdecl*)();
 using SceneReadyUpdateFn = void (__fastcall*)(void*);
+using FurnitureModeEnterFn = void* (__fastcall*)(void*);
 
 HMODULE g_module{};
 SceneReadyUpdateFn g_next_scene_ready{};
+FurnitureModeEnterFn g_next_furniture_mode_enter{};
 MewLogFn g_mew_log{};
 std::atomic<bool> g_enabled{false};
 std::atomic<bool> g_busy{false};
@@ -48,8 +52,6 @@ bool g_hotkey_down{};
 bool g_combine_requested{};
 std::chrono::steady_clock::time_point g_combine_request_deadline{};
 bool g_ui_rebuild_pending{};
-cdf::FurnitureUiRebuildStatus g_last_ui_rebuild_status{
-    cdf::FurnitureUiRebuildStatus::NotAttempted};
 
 enum class UiLanguage {
     Chinese,
@@ -394,10 +396,10 @@ std::string_view UiRebuildStatusName(
     switch (status) {
         case cdf::FurnitureUiRebuildStatus::NotAttempted:
             return "not_attempted";
-        case cdf::FurnitureUiRebuildStatus::Queued:
-            return "queued";
-        case cdf::FurnitureUiRebuildStatus::SceneUnavailable:
-            return "scene_unavailable";
+        case cdf::FurnitureUiRebuildStatus::Armed:
+            return "armed";
+        case cdf::FurnitureUiRebuildStatus::EnterContextUnavailable:
+            return "enter_context_unavailable";
         case cdf::FurnitureUiRebuildStatus::SignatureMismatch:
             return "signature_mismatch";
         case cdf::FurnitureUiRebuildStatus::ComponentUnavailable:
@@ -410,27 +412,10 @@ std::string_view UiRebuildStatusName(
             return "dirty_flag_write_failed";
         case cdf::FurnitureUiRebuildStatus::Exception:
             return "exception";
+        case cdf::FurnitureUiRebuildStatus::ComponentInvalid:
+            return "component_invalid";
     }
     return "unknown";
-}
-
-void RetryFurnitureUiRebuild(void* scene_manager) {
-    if (!g_ui_rebuild_pending) {
-        return;
-    }
-    const auto status = cdf::QueueFurnitureUiRebuild(scene_manager);
-    if (status == cdf::FurnitureUiRebuildStatus::Queued) {
-        g_ui_rebuild_pending = false;
-        g_last_ui_rebuild_status = status;
-        Log("furniture UI rebuild queued before mode re-entry "
-            "ui_rebuild_queued=1");
-        return;
-    }
-    if (status != g_last_ui_rebuild_status) {
-        g_last_ui_rebuild_status = status;
-        Log("furniture UI rebuild still pending reason=" +
-            std::string(UiRebuildStatusName(status)));
-    }
 }
 
 void StopBatch(
@@ -471,24 +456,16 @@ void StopBatch(
     ClearBatch();
 }
 
-void FinishBatch(void* scene_manager) {
+void FinishBatch() {
     const auto completed = g_batch.next_index;
     std::size_t ordinary_pairs{};
     std::size_t rare_pairs{};
     for (const auto& candidate : g_batch.candidates) {
         candidate.promote_to_rare ? ++ordinary_pairs : ++rare_pairs;
     }
-    const auto rebuild_status =
-        cdf::QueueFurnitureUiRebuild(scene_manager);
-    const bool rebuild_queued =
-        rebuild_status == cdf::FurnitureUiRebuildStatus::Queued;
-    g_ui_rebuild_pending = !rebuild_queued;
-    g_last_ui_rebuild_status = rebuild_status;
+    g_ui_rebuild_pending = true;
     Log("batch complete pairs=" + std::to_string(completed) +
-        " ui_rebuild_queued=" + std::to_string(rebuild_queued) +
-        " ui_rebuild_status=" +
-        std::string(UiRebuildStatusName(rebuild_status)) +
-        " retry_pending=" + std::to_string(g_ui_rebuild_pending));
+        " ui_refresh_pending_on_mode_enter=1");
     if (EnglishUi()) {
         Notify(
             "Batch combine complete: " + std::to_string(completed) +
@@ -579,7 +556,7 @@ void ProcessBatch(void* scene_manager) {
     }
 
     if (g_batch.next_index >= g_batch.candidates.size()) {
-        FinishBatch(scene_manager);
+        FinishBatch();
         return;
     }
 
@@ -638,7 +615,7 @@ void ProcessBatch(void* scene_manager) {
     }
 
     if (g_batch.next_index == g_batch.candidates.size()) {
-        FinishBatch(scene_manager);
+        FinishBatch();
     }
 }
 
@@ -782,10 +759,31 @@ void HandleCombine(void* scene_manager) {
     }
 }
 
-void __fastcall SceneReadyHook(void* scene_manager) {
-    if (g_enabled && scene_manager && g_ui_rebuild_pending) {
-        RetryFurnitureUiRebuild(scene_manager);
+void* __fastcall FurnitureModeEnterHook(void* mode_enter_context) {
+    auto rebuild_status = cdf::FurnitureUiRebuildStatus::NotAttempted;
+    if (g_enabled && g_ui_rebuild_pending) {
+        rebuild_status =
+            cdf::ArmFurnitureUiRebuildOnEnter(mode_enter_context);
     }
+    void* result{};
+    if (g_next_furniture_mode_enter) {
+        result = g_next_furniture_mode_enter(mode_enter_context);
+    }
+    if (rebuild_status != cdf::FurnitureUiRebuildStatus::NotAttempted) {
+        const bool armed =
+            rebuild_status == cdf::FurnitureUiRebuildStatus::Armed;
+        if (armed) {
+            g_ui_rebuild_pending = false;
+        }
+        Log("furniture mode enter transition=0_to_1 ui_rebuild_armed=" +
+            std::to_string(armed) + " status=" +
+            std::string(UiRebuildStatusName(rebuild_status)) +
+            " retry_pending=" + std::to_string(g_ui_rebuild_pending));
+    }
+    return result;
+}
+
+void __fastcall SceneReadyHook(void* scene_manager) {
     if (g_next_scene_ready) {
         g_next_scene_ready(scene_manager);
     }
@@ -838,23 +836,45 @@ bool ResolveAndHook() {
     if (!get_version || get_version() < 3 || !install_hook) {
         return false;
     }
+    if (!cdf::FurnitureModeEnterRefreshSupported()) {
+        if (g_mew_log) {
+            g_mew_log(
+                kOwner,
+                "Furniture mode-enter refresh signatures do not match");
+        }
+        return false;
+    }
     if (!cdf::InstallEnhancedFurniturePatches()) {
         if (g_mew_log) {
             g_mew_log(kOwner, "Enhanced furniture patch signatures do not match");
         }
         return false;
     }
-    void* trampoline{};
+    void* mode_enter_trampoline{};
     if (!install_hook(
-            kSceneReadyUpdateRva,
-            kSceneReadyStolenBytes,
-            reinterpret_cast<void*>(&SceneReadyHook),
-            &trampoline,
+            kFurnitureModeEnterRva,
+            kFurnitureModeEnterStolenBytes,
+            reinterpret_cast<void*>(&FurnitureModeEnterHook),
+            &mode_enter_trampoline,
             40,
             kOwner)) {
         return false;
     }
-    g_next_scene_ready = reinterpret_cast<SceneReadyUpdateFn>(trampoline);
+    g_next_furniture_mode_enter =
+        reinterpret_cast<FurnitureModeEnterFn>(mode_enter_trampoline);
+
+    void* scene_ready_trampoline{};
+    if (!install_hook(
+            kSceneReadyUpdateRva,
+            kSceneReadyStolenBytes,
+            reinterpret_cast<void*>(&SceneReadyHook),
+            &scene_ready_trampoline,
+            40,
+            kOwner)) {
+        return false;
+    }
+    g_next_scene_ready =
+        reinterpret_cast<SceneReadyUpdateFn>(scene_ready_trampoline);
     g_enabled = true;
     if (g_mew_log) {
         g_mew_log(kOwner, "Loaded v%s; furniture-mode hotkey is F8", CDF_VERSION);

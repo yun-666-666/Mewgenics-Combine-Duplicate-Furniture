@@ -172,10 +172,14 @@ bool FurnitureModeActive(void* scene_manager) noexcept {
     return cdf_native_furniture_mode_active(scene_manager) != 0;
 }
 
-FurnitureUiRebuildStatus QueueFurnitureUiRebuild(
-    void* scene_manager) noexcept {
+bool FurnitureModeEnterRefreshSupported() noexcept {
+    return cdf_native_furniture_mode_enter_refresh_supported() != 0;
+}
+
+FurnitureUiRebuildStatus ArmFurnitureUiRebuildOnEnter(
+    void* mode_enter_context) noexcept {
     return static_cast<FurnitureUiRebuildStatus>(
-        cdf_native_queue_furniture_ui_rebuild(scene_manager));
+        cdf_native_arm_furniture_ui_rebuild_on_enter(mode_enter_context));
 }
 
 bool SceneContainsComponent(

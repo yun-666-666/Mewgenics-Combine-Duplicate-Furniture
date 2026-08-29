@@ -12,7 +12,7 @@ A Windows x64 Mewgenics mod that batch-combines duplicate furniture from the fur
 - Two ordinary copies become one native Rare item with 2x base attributes.
 - Two Rare copies become one persistent enhanced Rare item with 4x base attributes and room effects.
 - Furniture that the game marks as unable to become Rare, such as the Food Box, is skipped.
-- No furniture is modified while the furniture screen is active. Leave furniture mode after pressing `F8`; after the batch finishes, the mod keeps retrying the game's native list-rebuild request while the screen is closed, so the updated attributes are ready on the next entry.
+- No furniture is modified while the furniture screen is active. Leave furniture mode after pressing `F8`; on the next home-to-furniture transition, the mod marks the list dirty immediately before the game changes the furniture-mode value and performs its native rebuild.
 - The hotkey can be changed to `F1`-`F12` in the external configuration file.
 
 ## Installation
@@ -100,7 +100,7 @@ The release layout is generated under `dist/Release`.
 - 两件普通家具合并为一件原生 Rare 家具，基础属性为 2 倍。
 - 两件 Rare 家具合并为一件持久化的强化 Rare 家具，基础属性和房间效果为 4 倍。
 - 游戏标记为不能变成 Rare 的特殊家具（例如食物箱）不会参与合并。
-- 家具界面仍打开时不会修改任何家具。按 `F8` 后先退出家具界面，MOD 会在界面完全关闭后重新核对并执行批次，并在界面关闭期间持续重试游戏原生列表重建请求，让再次进入时直接显示新属性。
+- 家具界面仍打开时不会修改任何家具。按 `F8` 后先退出家具界面，MOD 会在界面完全关闭后重新核对并执行批次；下次从家界面进入家具界面时，会在游戏改变家具模式数值并执行原生重建之前标记列表刷新。
 - 可以在游戏外的配置文件中把快捷键改为 `F1` 至 `F12`。
 
 ## 安装

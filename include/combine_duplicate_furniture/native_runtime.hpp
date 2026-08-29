@@ -14,14 +14,15 @@ struct NativeFailure {
 
 enum class FurnitureUiRebuildStatus : int {
     NotAttempted = 0,
-    Queued = 1,
-    SceneUnavailable = -1,
+    Armed = 1,
+    EnterContextUnavailable = -1,
     SignatureMismatch = -2,
     ComponentUnavailable = -3,
     ComponentUnreadable = -4,
     ModeActive = -5,
     WriteFailed = -6,
     Exception = -7,
+    ComponentInvalid = -8,
 };
 
 class NativeTransactionPort final : public TransactionPort {
@@ -65,8 +66,9 @@ private:
 };
 
 [[nodiscard]] bool FurnitureModeActive(void* scene_manager) noexcept;
-[[nodiscard]] FurnitureUiRebuildStatus QueueFurnitureUiRebuild(
-    void* scene_manager) noexcept;
+[[nodiscard]] bool FurnitureModeEnterRefreshSupported() noexcept;
+[[nodiscard]] FurnitureUiRebuildStatus ArmFurnitureUiRebuildOnEnter(
+    void* mode_enter_context) noexcept;
 [[nodiscard]] bool SceneContainsComponent(
     void* scene_manager,
     const void* component) noexcept;

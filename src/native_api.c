@@ -16,7 +16,8 @@ enum {
     CDF_FURNITURE_DETAIL_VALUE_FLAGS_1_RVA = 0x1A11F6,
     CDF_FURNITURE_DETAIL_VALUE_FLAGS_2_RVA = 0x1A1276,
     CDF_FURNITURE_REBUILD_RVA = 0x1A5470,
-    CDF_FURNITURE_MODE_ENTER_RVA = 0x1AB95E,
+    CDF_FURNITURE_MODE_ENTER_FUNCTION_RVA = 0x1AB940,
+    CDF_FURNITURE_MODE_ENTER_REBUILD_RVA = 0x1AB95E,
     CDF_FURNITURE_PIECE_VTABLE_RVA = 0xEDE690,
     CDF_FURNITURE_BUILDING_UI_VTABLE_RVA = 0xF082A8,
     CDF_SCENE_COMPONENT_LIST_OFFSET = 0x18,
@@ -197,7 +198,7 @@ static int cdf_signatures_valid(void) {
             sizeof(store_signature));
 }
 
-static int cdf_furniture_rebuild_signatures_valid(void) {
+static int cdf_furniture_rebuild_runtime_signatures_valid(void) {
     static const uint8_t rebuild_signature[] = {
         0x40, 0x57, 0x48, 0x83, 0xEC, 0x40,
         0x80, 0x79, 0x58, 0x00};
@@ -214,9 +215,24 @@ static int cdf_furniture_rebuild_signatures_valid(void) {
             rebuild_signature,
             sizeof(rebuild_signature)) &&
         cdf_signature(
-            executable + CDF_FURNITURE_MODE_ENTER_RVA,
+            executable + CDF_FURNITURE_MODE_ENTER_REBUILD_RVA,
             mode_enter_signature,
             sizeof(mode_enter_signature));
+}
+
+static int cdf_furniture_mode_enter_hook_signature_valid(void) {
+    static const uint8_t mode_enter_function_signature[] = {
+        0x48, 0x89, 0x5C, 0x24, 0x10,
+        0x48, 0x89, 0x6C, 0x24, 0x18,
+        0x48, 0x89, 0x74, 0x24, 0x20};
+    const uint8_t* executable =
+        (const uint8_t*)GetModuleHandleW(NULL);
+    return executable &&
+        cdf_signature(
+            executable + CDF_FURNITURE_MODE_ENTER_FUNCTION_RVA,
+            mode_enter_function_signature,
+            sizeof(mode_enter_function_signature)) &&
+        cdf_furniture_rebuild_runtime_signatures_valid();
 }
 
 static int cdf_valid_vtable(
@@ -423,24 +439,29 @@ int cdf_native_furniture_mode_active(void* scene_manager) {
     }
 }
 
-CdfFurnitureUiRebuildStatus cdf_native_queue_furniture_ui_rebuild(
-    void* scene_manager) {
+CdfFurnitureUiRebuildStatus cdf_native_arm_furniture_ui_rebuild_on_enter(
+    void* mode_enter_context) {
     void* component;
-    if (!scene_manager) {
-        return CDF_FURNITURE_UI_REBUILD_SCENE_UNAVAILABLE;
+    if (!mode_enter_context || !cdf_readable(
+            mode_enter_context, sizeof(void*) * 2U)) {
+        return CDF_FURNITURE_UI_REBUILD_ENTER_CONTEXT_UNAVAILABLE;
     }
-    if (!cdf_furniture_rebuild_signatures_valid()) {
+    if (!cdf_furniture_rebuild_runtime_signatures_valid()) {
         return CDF_FURNITURE_UI_REBUILD_SIGNATURE_MISMATCH;
     }
-    component = cdf_find_furniture_ui(scene_manager);
-    if (!component) {
-        return CDF_FURNITURE_UI_REBUILD_COMPONENT_UNAVAILABLE;
-    }
-    if (!cdf_readable(
-            component, CDF_FURNITURE_MODE_ACTIVE_OFFSET + 1U)) {
-        return CDF_FURNITURE_UI_REBUILD_COMPONENT_UNREADABLE;
-    }
     __try {
+        component = *(void**)((uint8_t*)mode_enter_context + sizeof(void*));
+        if (!component) {
+            return CDF_FURNITURE_UI_REBUILD_COMPONENT_UNAVAILABLE;
+        }
+        if (!cdf_valid_vtable(
+                component, CDF_FURNITURE_BUILDING_UI_VTABLE_RVA)) {
+            return CDF_FURNITURE_UI_REBUILD_COMPONENT_INVALID;
+        }
+        if (!cdf_readable(
+                component, CDF_FURNITURE_MODE_ACTIVE_OFFSET + 1U)) {
+            return CDF_FURNITURE_UI_REBUILD_COMPONENT_UNREADABLE;
+        }
         if (*(uint8_t*)((uint8_t*)component +
                 CDF_FURNITURE_MODE_ACTIVE_OFFSET) != 0U) {
             return CDF_FURNITURE_UI_REBUILD_MODE_ACTIVE;
@@ -449,12 +470,16 @@ CdfFurnitureUiRebuildStatus cdf_native_queue_furniture_ui_rebuild(
             CDF_FURNITURE_REBUILD_DIRTY_OFFSET) = 1U;
         return *(uint8_t*)((uint8_t*)component +
                 CDF_FURNITURE_REBUILD_DIRTY_OFFSET) != 0U
-            ? CDF_FURNITURE_UI_REBUILD_QUEUED
+            ? CDF_FURNITURE_UI_REBUILD_ARMED
             : CDF_FURNITURE_UI_REBUILD_WRITE_FAILED;
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
         return CDF_FURNITURE_UI_REBUILD_EXCEPTION;
     }
+}
+
+int cdf_native_furniture_mode_enter_refresh_supported(void) {
+    return cdf_furniture_mode_enter_hook_signature_valid();
 }
 
 int cdf_native_scene_contains_component(
