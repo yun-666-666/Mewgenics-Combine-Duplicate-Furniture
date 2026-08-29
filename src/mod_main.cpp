@@ -523,7 +523,7 @@ void FinishBatch(void* scene_manager) {
                 (candidate.promote_to_rare
                     ? cdf::kRareFlag
                     : cdf::kEnhancedFlag)});
-        if (candidate.promote_to_enhanced) {
+        if (candidate.promote_to_rare || candidate.promote_to_enhanced) {
             g_ui_rebuild_keys.push_back(candidate.keep_key);
         }
     }
@@ -857,7 +857,7 @@ void* __fastcall FurnitureModeEnterHook(void* mode_enter_context) {
             std::string(UiRebuildStatusName(rebuild.status)) +
             " cached_rows_scanned=" +
             std::to_string(rebuild.rows_scanned) +
-            " enhanced_rows_invalidated=" +
+            " changed_rows_invalidated=" +
             std::to_string(rebuild.rows_invalidated) +
             " retry_pending=" + std::to_string(g_ui_rebuild_pending));
     }
