@@ -24,7 +24,6 @@ struct EnhancedPatchAudit {
 enum class FurnitureUiRebuildStatus : int {
     NotAttempted = 0,
     Armed = 1,
-    Refreshed = 2,
     EnterContextUnavailable = -1,
     SignatureMismatch = -2,
     ComponentUnavailable = -3,
@@ -34,7 +33,6 @@ enum class FurnitureUiRebuildStatus : int {
     Exception = -7,
     ComponentInvalid = -8,
     RowCacheUnreadable = -9,
-    ModeInactive = -10,
 };
 
 struct FurnitureUiRebuildResult {
@@ -87,9 +85,6 @@ private:
 [[nodiscard]] bool FurnitureModeEnterRefreshSupported() noexcept;
 [[nodiscard]] FurnitureUiRebuildResult PrepareFurnitureUiRebuildOnEnter(
     void* mode_enter_context,
-    std::span<const std::uint64_t> stale_row_keys) noexcept;
-[[nodiscard]] FurnitureUiRebuildResult RefreshFurnitureUiNow(
-    void* scene_manager,
     std::span<const std::uint64_t> stale_row_keys) noexcept;
 [[nodiscard]] bool SceneContainsComponent(
     void* scene_manager,

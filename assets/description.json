@@ -1,7 +1,7 @@
 {
   "title": "Combine Duplicate Furniture",
-  "description": "Press F8 in furniture mode; after 3 seconds the mod combines identical furniture and refreshes the current furniture screen. External dialogs are disabled by default.",
+  "description": "Press F8 in furniture mode, then leave the furniture screen to safely batch-combine identical furniture. External dialogs are disabled by default.",
   "author": "OpenAI GPT-5",
-  "version": "0.6.16",
+  "version": "0.6.15",
   "requirements": []
 }

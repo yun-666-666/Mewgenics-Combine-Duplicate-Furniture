@@ -189,19 +189,6 @@ FurnitureUiRebuildResult PrepareFurnitureUiRebuildOnEnter(
         result.rows_invalidated};
 }
 
-FurnitureUiRebuildResult RefreshFurnitureUiNow(
-    void* scene_manager,
-    std::span<const std::uint64_t> stale_row_keys) noexcept {
-    const auto result = cdf_native_refresh_furniture_ui_now(
-        scene_manager,
-        stale_row_keys.data(),
-        stale_row_keys.size());
-    return {
-        static_cast<FurnitureUiRebuildStatus>(result.status),
-        result.rows_scanned,
-        result.rows_invalidated};
-}
-
 bool SceneContainsComponent(
     void* scene_manager,
     const void* component) noexcept {

@@ -63,7 +63,6 @@ typedef struct CdfPointerVector {
 
 typedef void (__fastcall* CdfStorageDeleteFn)(void*, uint64_t);
 typedef void (__fastcall* CdfStorePieceFn)(void*);
-typedef void (__fastcall* CdfFurnitureRebuildFn)(void*);
 
 static int cdf_readable(const void* pointer, size_t byte_count);
 
@@ -555,48 +554,15 @@ static int cdf_contains_stable_key(
     return 0;
 }
 
-static int cdf_invalidate_furniture_ui_rows(
-    void* component,
-    const uint64_t* stale_row_keys,
-    size_t stale_row_key_count,
-    CdfFurnitureUiRebuildResult* result) {
-    void** rows = NULL;
-    uint32_t row_count = 0U;
-    uint32_t index;
-    if (stale_row_key_count == 0U) {
-        return 1;
-    }
-    if (!cdf_furniture_ui_rows(component, &rows, &row_count)) {
-        return 0;
-    }
-    result->rows_scanned = row_count;
-    for (index = 0; index < row_count; ++index) {
-        void* row = rows[index];
-        uint64_t stable_key;
-        if (!cdf_readable(
-                row, CDF_FURNITURE_ROW_STABLE_KEY_OFFSET +
-                    sizeof(uint64_t))) {
-            return 0;
-        }
-        stable_key = *(uint64_t*)((uint8_t*)row +
-            CDF_FURNITURE_ROW_STABLE_KEY_OFFSET);
-        if (cdf_contains_stable_key(
-                stale_row_keys, stale_row_key_count, stable_key)) {
-            *(uint64_t*)((uint8_t*)row +
-                CDF_FURNITURE_ROW_STABLE_KEY_OFFSET) =
-                stable_key ^ (1ULL << 63U);
-            ++result->rows_invalidated;
-        }
-    }
-    return 1;
-}
-
 CdfFurnitureUiRebuildResult cdf_native_prepare_furniture_ui_rebuild_on_enter(
     void* mode_enter_context,
     const uint64_t* stale_row_keys,
     size_t stale_row_key_count) {
     CdfFurnitureUiRebuildResult result;
     void* component;
+    void** rows = NULL;
+    uint32_t row_count = 0U;
+    uint32_t index;
     memset(&result, 0, sizeof(result));
     if (!mode_enter_context || !cdf_readable(
             mode_enter_context, sizeof(void*) * 2U) ||
@@ -636,75 +602,32 @@ CdfFurnitureUiRebuildResult cdf_native_prepare_furniture_ui_rebuild_on_enter(
             result.status = CDF_FURNITURE_UI_REBUILD_WRITE_FAILED;
             return result;
         }
-        if (!cdf_invalidate_furniture_ui_rows(
-                component,
-                stale_row_keys,
-                stale_row_key_count,
-                &result)) {
+        if (stale_row_key_count != 0U &&
+            !cdf_furniture_ui_rows(component, &rows, &row_count)) {
             result.status = CDF_FURNITURE_UI_REBUILD_ROW_CACHE_UNREADABLE;
             return result;
+        }
+        result.rows_scanned = row_count;
+        for (index = 0; index < row_count; ++index) {
+            void* row = rows[index];
+            uint64_t stable_key;
+            if (!cdf_readable(
+                    row, CDF_FURNITURE_ROW_STABLE_KEY_OFFSET +
+                        sizeof(uint64_t))) {
+                result.status = CDF_FURNITURE_UI_REBUILD_ROW_CACHE_UNREADABLE;
+                return result;
+            }
+            stable_key = *(uint64_t*)((uint8_t*)row +
+                CDF_FURNITURE_ROW_STABLE_KEY_OFFSET);
+            if (cdf_contains_stable_key(
+                    stale_row_keys, stale_row_key_count, stable_key)) {
+                *(uint64_t*)((uint8_t*)row +
+                    CDF_FURNITURE_ROW_STABLE_KEY_OFFSET) =
+                    stable_key ^ (1ULL << 63U);
+                ++result.rows_invalidated;
+            }
         }
         result.status = CDF_FURNITURE_UI_REBUILD_ARMED;
-        return result;
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        result.status = CDF_FURNITURE_UI_REBUILD_EXCEPTION;
-        return result;
-    }
-}
-
-CdfFurnitureUiRebuildResult cdf_native_refresh_furniture_ui_now(
-    void* scene_manager,
-    const uint64_t* stale_row_keys,
-    size_t stale_row_key_count) {
-    CdfFurnitureUiRebuildResult result;
-    void* component;
-    uint8_t* executable;
-    memset(&result, 0, sizeof(result));
-    if (!scene_manager ||
-        (stale_row_key_count != 0U && !stale_row_keys)) {
-        result.status = CDF_FURNITURE_UI_REBUILD_COMPONENT_UNAVAILABLE;
-        return result;
-    }
-    if (!cdf_furniture_rebuild_runtime_signatures_valid()) {
-        result.status = CDF_FURNITURE_UI_REBUILD_SIGNATURE_MISMATCH;
-        return result;
-    }
-    component = cdf_find_furniture_ui(scene_manager);
-    if (!component) {
-        result.status = CDF_FURNITURE_UI_REBUILD_COMPONENT_UNAVAILABLE;
-        return result;
-    }
-    if (!cdf_readable(
-            component, CDF_FURNITURE_MODE_ACTIVE_OFFSET + 1U)) {
-        result.status = CDF_FURNITURE_UI_REBUILD_COMPONENT_UNREADABLE;
-        return result;
-    }
-    executable = (uint8_t*)GetModuleHandleW(NULL);
-    __try {
-        if (*(uint8_t*)((uint8_t*)component +
-                CDF_FURNITURE_MODE_ACTIVE_OFFSET) == 0U) {
-            result.status = CDF_FURNITURE_UI_REBUILD_MODE_INACTIVE;
-            return result;
-        }
-        if (!cdf_invalidate_furniture_ui_rows(
-                component,
-                stale_row_keys,
-                stale_row_key_count,
-                &result)) {
-            result.status = CDF_FURNITURE_UI_REBUILD_ROW_CACHE_UNREADABLE;
-            return result;
-        }
-        *(uint8_t*)((uint8_t*)component +
-            CDF_FURNITURE_REBUILD_DIRTY_OFFSET) = 1U;
-        if (*(uint8_t*)((uint8_t*)component +
-                CDF_FURNITURE_REBUILD_DIRTY_OFFSET) == 0U) {
-            result.status = CDF_FURNITURE_UI_REBUILD_WRITE_FAILED;
-            return result;
-        }
-        ((CdfFurnitureRebuildFn)(
-            executable + CDF_FURNITURE_REBUILD_RVA))(component);
-        result.status = CDF_FURNITURE_UI_REBUILD_REFRESHED;
         return result;
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {

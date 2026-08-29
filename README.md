@@ -12,7 +12,7 @@ A Windows x64 Mewgenics mod that batch-combines duplicate furniture from the fur
 - Two ordinary copies become one native Rare item with 2x base attributes.
 - Two Rare copies become one persistent enhanced Rare item with 4x base attributes and room effects.
 - Furniture that the game marks as unable to become Rare, such as the Food Box, is skipped.
-- After `F8`, the mod waits three seconds while the current furniture screen remains open, revalidates the sealed batch, combines it, invalidates changed cached rows, and runs the game's native furniture-list rebuild in the current screen.
+- No furniture is modified while the furniture screen is active. Leave furniture mode after pressing `F8`; on the next home-to-furniture transition, the mod marks the list dirty immediately before the game changes the furniture-mode value and performs its native rebuild.
 - The hotkey can be changed to `F1`-`F12` in the external configuration file.
 
 ## Installation
@@ -63,8 +63,8 @@ The supported language values are `zh-CN` and `en-US`. With `show_dialogs` set t
 
 1. Enter furniture mode.
 2. Press the configured hotkey (`F8` by default).
-3. With the default configuration, no window appears. Keep the furniture screen open for about three seconds while the sealed batch is revalidated and combined.
-4. The current furniture list then rebuilds automatically. Consumed copies disappear and the kept items show their new attributes without leaving and re-entering furniture mode.
+3. With the default configuration, no window appears. Leave furniture mode to let the sealed batch start safely.
+4. Wait briefly for the batch to finish, then enter furniture mode again. Consumed copies are gone and the kept items are rebuilt with their new attributes.
 
 The log is written to:
 
@@ -100,7 +100,7 @@ The release layout is generated under `dist/Release`.
 - 两件普通家具合并为一件原生 Rare 家具，基础属性为 2 倍。
 - 两件 Rare 家具合并为一件持久化的强化 Rare 家具，基础属性和房间效果为 4 倍。
 - 游戏标记为不能变成 Rare 的特殊家具（例如食物箱）不会参与合并。
-- 按 `F8` 后保持当前家具界面打开，MOD 会等待 3 秒、重新核对已封存的批次、执行合并、使变更家具的缓存行失效，并在当前界面调用游戏原生的家具列表重建。
+- 家具界面仍打开时不会修改任何家具。按 `F8` 后先退出家具界面，MOD 会在界面完全关闭后重新核对并执行批次；下次从家界面进入家具界面时，会在游戏改变家具模式数值并执行原生重建之前标记列表刷新。
 - 可以在游戏外的配置文件中把快捷键改为 `F1` 至 `F12`。
 
 ## 安装
@@ -151,8 +151,8 @@ Mods/CombineDuplicateFurniture/config.json
 
 1. 进入家具界面。
 2. 按配置的快捷键，默认是 `F8`。
-3. 默认配置下不会显示任何窗口。保持家具界面打开约 3 秒，让 MOD 重新核对并执行已封存的批次。
-4. 当前家具列表会自动重建；多余家具会消失，保留家具会直接显示新的属性，不需要退出后重新进入。
+3. 默认配置下不会显示任何窗口。按键后退出家具界面，让已封存的批次安全开始执行。
+4. 稍等批次完成，再重新进入家具界面。多余家具会消失，保留家具会显示新的属性。
 
 日志位置：
 
