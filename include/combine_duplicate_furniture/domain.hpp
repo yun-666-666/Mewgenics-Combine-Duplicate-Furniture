@@ -40,8 +40,6 @@ struct FurnitureInstance {
     std::string item_id;
     std::string room_id;
     std::uint64_t placement_flags{};
-    bool delete_pending{};
-    std::uint32_t runtime_match_count{};
 
     [[nodiscard]] bool IsRare() const noexcept {
         return (placement_flags & kRareFlag) != 0;
@@ -68,7 +66,6 @@ struct CombineCandidate {
     std::uint64_t keep_flags{};
     std::uint64_t consume_flags{};
     std::size_t scanned_count{};
-    bool consume_placed{};
     bool promote_to_rare{};
     bool promote_to_enhanced{};
 };

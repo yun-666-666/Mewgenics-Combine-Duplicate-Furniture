@@ -1,19 +1,20 @@
 # Combine Duplicate Furniture
 
-A Windows x64 Mewgenics mod that batch-combines duplicate furniture from the furniture screen. The interface supports Chinese and English; Chinese is the default.
+A Windows x64 Mewgenics mod that batch-combines duplicate furniture already stored in the furniture inventory. Chinese is the default language; English is also supported.
 
 中文说明见下方的 [中文](#中文) 部分。
 
 ## Features
 
-- Press `F8` in furniture mode to seal all deterministic pairs of identical furniture at the same rarity.
-- External dialogs are disabled by default, so `F8` seals the batch immediately without leaving the game window.
-- The known-stable external confirmation and status dialogs can be restored with `"show_dialogs": true`; the mod does not install a custom SWF or shared game-UI hook.
+- Press `F8` in furniture mode to seal deterministic pairs of identical inventory furniture at the same rarity.
+- Furniture still placed in a room is ignored. Move every copy you want to combine back into the furniture inventory before pressing `F8`.
 - Two ordinary copies become one native Rare item with 2x base attributes.
 - Two Rare copies become one persistent enhanced Rare item with 4x base attributes and room effects.
 - Furniture that the game marks as unable to become Rare, such as the Food Box, is skipped.
-- No furniture is modified while the furniture screen is active. Leave furniture mode after pressing `F8`; on the next home-to-furniture transition, the mod marks the list dirty immediately before the game changes the furniture-mode value and performs its native rebuild.
-- The hotkey can be changed to `F1`-`F12` in the external configuration file.
+- External dialogs are disabled by default. The mod does not install a custom SWF or shared game-UI hook.
+- Hook and patch locations are resolved from the loaded game executable at runtime instead of being restricted to one exact RVA table or game-version whitelist. If an optional capability cannot be resolved after a game update, that capability is disabled and reported in the log instead of rejecting the entire game version.
+
+The stable `v0.6.15` inventory merge and attribute-refresh flow has been confirmed by player testing.
 
 ## Installation
 
@@ -31,13 +32,11 @@ A Windows x64 Mewgenics mod that batch-combines duplicate furniture from the fur
 
 ## Configuration
 
-Settings are changed outside the game. Close Mewgenics, open:
+Close Mewgenics and edit:
 
 ```text
 Mods/CombineDuplicateFurniture/config.json
 ```
-
-Chinese is the default:
 
 ```json
 {
@@ -47,24 +46,23 @@ Chinese is the default:
 }
 ```
 
-For English, change only the language value:
+- `hotkey`: `F1` through `F12`.
+- `language`: `zh-CN` or `en-US`.
+- `show_dialogs`: `false` suppresses confirmation, completion, information, and error windows. Set it to `true` to restore the stable external dialogs.
 
-```json
-{
-  "hotkey": "F8",
-  "language": "en-US",
-  "show_dialogs": false
-}
-```
-
-The supported language values are `zh-CN` and `en-US`. With `show_dialogs` set to `false` or omitted, confirmation, completion, information, and error windows are suppressed and outcomes are written to the mod log. Set it to `true` only if you want the stable external dialogs back. The configuration is loaded when the mod starts, so restart the game after editing it.
+The configuration is loaded when the mod starts, so restart the game after editing it.
 
 ## Usage
 
-1. Enter furniture mode.
-2. Press the configured hotkey (`F8` by default).
-3. With the default configuration, no window appears. Leave furniture mode to let the sealed batch start safely.
-4. Wait briefly for the batch to finish, then enter furniture mode again. Consumed copies are gone and the kept items are rebuilt with their new attributes.
+1. Manually move every duplicate you want to combine out of its room and back into the furniture inventory.
+2. Enter furniture mode and press the configured hotkey (`F8` by default).
+3. With the default `show_dialogs: false`, no window or on-screen notification appears. This is intentional; the hotkey result is written to the mod log.
+4. Leave furniture mode. The sealed batch is revalidated and then processed outside the furniture screen.
+5. Wait briefly and enter furniture mode again to view the updated items and attributes.
+
+Furniture that remains placed in a room does not enter the batch and is never moved automatically by this mod.
+
+A batch is processed one pair at a time. If a later pair fails a safety check, earlier completed pairs remain combined and the remaining pairs are left unchanged. The log records the completed and planned pair counts.
 
 The log is written to:
 
@@ -72,9 +70,11 @@ The log is written to:
 Mods/CombineDuplicateFurniture/logs/CombineDuplicateFurniture.log
 ```
 
-## Acknowledgements
+Useful success markers include `hotkey press captured`, `batch sealed`, `batch pair complete`, and `batch complete`.
 
-This project was completed with GPT-5.6. Thank you to all Mewgenics players who tested the mod and shared their feedback.
+## Game updates
+
+The mod discovers required code locations from the currently loaded executable rather than checking for one exact supported Mewgenics build. This allows address-only game updates to continue working without a new RVA table. A game update can still change functions or object layouts; unresolved required hooks or disabled optional capabilities are reported in the log so they can be repaired when an actual incompatibility appears.
 
 ## Building
 
@@ -90,18 +90,19 @@ The release layout is generated under `dist/Release`.
 
 ## 中文
 
-这是一个 Windows x64 Mewgenics MOD，可以在家具界面批量合并同款家具。界面支持中文和英文，默认使用中文。
+这是一个 Windows x64 Mewgenics MOD，用于批量合并已经收回家具栏的重复家具。默认使用中文，也支持英文。
 
 ## 功能
 
-- 在家具界面按 `F8`，扫描所有稀有度相同的同款家具并封存确定性的合并组合。
-- 默认关闭所有外部弹窗；按下 `F8` 后只封存批次，不会切出游戏窗口。
-- 如确实需要，可通过 `"show_dialogs": true` 恢复已知稳定的外部确认和状态窗口；本 MOD 不再安装自定义 SWF，也不再挂接共享游戏 UI。
+- 在家具界面按 `F8`，封存家具栏内稀有度相同、同款家具的确定性合并组合。
+- 仍摆放在房间里的家具会被忽略。请先手动把所有想要合并的家具移回家具栏，再按 `F8`。
 - 两件普通家具合并为一件原生 Rare 家具，基础属性为 2 倍。
 - 两件 Rare 家具合并为一件持久化的强化 Rare 家具，基础属性和房间效果为 4 倍。
-- 游戏标记为不能变成 Rare 的特殊家具（例如食物箱）不会参与合并。
-- 家具界面仍打开时不会修改任何家具。按 `F8` 后先退出家具界面，MOD 会在界面完全关闭后重新核对并执行批次；下次从家界面进入家具界面时，会在游戏改变家具模式数值并执行原生重建之前标记列表刷新。
-- 可以在游戏外的配置文件中把快捷键改为 `F1` 至 `F12`。
+- 游戏标记为不能变成 Rare 的特殊家具，例如食物箱，不会参与合并。
+- 默认关闭外部弹窗；本 MOD 不安装自定义 SWF，也不挂接共享游戏 UI。
+- 挂钩和补丁位置会从当前加载的游戏 EXE 中动态解析，不再依赖单一版本的固定 RVA 表或游戏版本白名单。游戏更新后，如果某个可选能力无法解析，只会关闭该能力并写入日志，而不是因为版本不同直接拒绝整个 MOD。
+
+稳定版 `v0.6.15` 的家具栏合并和属性刷新流程已经由玩家实际确认正常。
 
 ## 安装
 
@@ -119,13 +120,11 @@ The release layout is generated under `dist/Release`.
 
 ## 配置
 
-设置不在游戏内修改。先退出游戏，然后打开：
+退出 Mewgenics 后编辑：
 
 ```text
 Mods/CombineDuplicateFurniture/config.json
 ```
-
-默认中文配置：
 
 ```json
 {
@@ -135,24 +134,23 @@ Mods/CombineDuplicateFurniture/config.json
 }
 ```
 
-切换为英文时，只修改 `language`：
+- `hotkey`：支持 `F1` 至 `F12`。
+- `language`：支持 `zh-CN` 和 `en-US`。
+- `show_dialogs`：设为 `false` 时不显示确认、完成、普通信息和错误窗口；设为 `true` 可恢复稳定的游戏外弹窗。
 
-```json
-{
-  "hotkey": "F8",
-  "language": "en-US",
-  "show_dialogs": false
-}
-```
-
-语言目前支持 `zh-CN` 和 `en-US`。当 `show_dialogs` 为 `false` 或缺省时，确认、完成、普通信息和错误窗口都会关闭，结果只写入 MOD 日志；只有希望恢复稳定的游戏外弹窗时才设为 `true`。配置会在 MOD 启动时读取，修改后重新启动游戏即可生效。
+配置在 MOD 启动时读取，修改后需要重新启动游戏。
 
 ## 使用方法
 
-1. 进入家具界面。
-2. 按配置的快捷键，默认是 `F8`。
-3. 默认配置下不会显示任何窗口。按键后退出家具界面，让已封存的批次安全开始执行。
-4. 稍等批次完成，再重新进入家具界面。多余家具会消失，保留家具会显示新的属性。
+1. 手动把所有想要合并的重复家具从房间移回家具栏。
+2. 进入家具界面，按配置的快捷键，默认是 `F8`。
+3. 默认配置为 `show_dialogs: false`，所以不会出现窗口或游戏内提示。这是预期行为；快捷键处理结果会写入 MOD 日志。
+4. 退出家具界面。MOD 会重新核对已封存的批次，然后在家具界面外逐组执行合并。
+5. 稍等片刻，再进入家具界面查看更新后的家具和属性。
+
+仍放在房间里的家具不会加入批次，本 MOD 也不会自动把它们收回家具栏。
+
+批次会逐组处理。如果后面的某一组没有通过安全检查，之前已经完成的组会保留合并结果，后续尚未执行的组不会被修改。日志会记录已完成数量和计划总数。
 
 日志位置：
 
@@ -160,6 +158,18 @@ Mods/CombineDuplicateFurniture/config.json
 Mods/CombineDuplicateFurniture/logs/CombineDuplicateFurniture.log
 ```
 
-## 致谢
+常见的成功日志包括 `hotkey press captured`、`batch sealed`、`batch pair complete` 和 `batch complete`。
 
-本项目由 GPT-5.6 完成。感谢所有参与测试并提供反馈的 Mewgenics 玩家。
+## 游戏更新兼容
+
+MOD 会根据当前加载的游戏 EXE 查找所需代码位置，不再检查某个唯一受支持的 Mewgenics 版本。因此，仅仅改变地址的游戏更新不需要重新维护固定 RVA 表。游戏更新仍可能改变函数或对象结构；如果届时确实出现不兼容，无法解析的必需挂钩或被关闭的可选能力会写入日志，再针对实际问题修复。
+
+## 构建
+
+安装 Visual Studio 2022 C++/CMake 工具后，在 PowerShell 中运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/build.ps1 -Configuration Release
+```
+
+发布目录生成在 `dist/Release`。

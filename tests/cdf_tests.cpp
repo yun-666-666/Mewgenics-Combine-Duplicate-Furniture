@@ -43,19 +43,12 @@ FurnitureInstance Item(
     std::uint64_t key,
     std::string id = "chair",
     std::uint64_t flags = 0,
-    bool pending = false,
-    std::uint32_t matches = 0,
     std::string room = {}) {
-    if (matches == 1 && room.empty()) {
-        room = "TestRoom";
-    }
     return {
         key,
         std::move(id),
         std::move(room),
-        flags,
-        pending,
-        matches};
+        flags};
 }
 
 ScanSnapshot Snapshot(std::vector<FurnitureInstance> items) {
@@ -192,55 +185,24 @@ void MultipleOrdinaryCreatesAllPairs() {
     CHECK(candidates[1].consume_key == 4);
 }
 
-void StoredMaterialIsPreferred() {
-    const auto candidates = cdf::FindCandidates(
-        Snapshot({Item(8, "chair", 0, false, 1), Item(3)}), Catalog());
-    CHECK(candidates.size() == 1);
-    CHECK(candidates[0].keep_key == 8);
-    CHECK(candidates[0].consume_key == 3);
-    CHECK(!candidates[0].consume_placed);
-}
-
-void TwoPlacedRequireStoreConfirmation() {
-    const auto candidates = cdf::FindCandidates(
-        Snapshot({
-            Item(8, "chair", 0, false, 1),
-            Item(3, "chair", 0, false, 1)}),
-        Catalog());
-    CHECK(candidates.size() == 1);
-    CHECK(candidates[0].consume_placed);
-}
-
-void UnavailablePlacedIsNeverConsumed() {
-    const auto candidates = cdf::FindCandidates(
-        Snapshot({
-            Item(8, "chair", 0, false, 0, "Floor2_Large"),
-            Item(3, "chair", 0, false, 1)}),
-        Catalog());
-    CHECK(candidates.size() == 1);
-    CHECK(candidates[0].keep_key == 8);
-    CHECK(candidates[0].consume_key == 3);
-    CHECK(candidates[0].consume_placed);
-}
-
-void TwoUnavailablePlacedAreSkipped() {
+void FurnitureInRoomsIsSkipped() {
     CHECK(cdf::FindCandidates(
         Snapshot({
-            Item(8, "chair", 0, false, 0, "Floor2_Large"),
-            Item(3, "chair", 0, false, 0, "Floor2_Large")}),
+            Item(8, "chair", 0, "Floor2_Large"),
+            Item(3, "chair", 0, "Floor2_Large")}),
         Catalog()).empty());
 }
 
-void StoredConsumeStillHasPriority() {
+void RoomFurnitureDoesNotBlockStoredPair() {
     const auto candidates = cdf::FindCandidates(
         Snapshot({
-            Item(8, "chair", 0, false, 0, "Floor2_Large"),
-            Item(5, "chair", 0, false, 1),
+            Item(8, "chair", 0, "Floor2_Large"),
+            Item(5),
             Item(3)}),
         Catalog());
     CHECK(candidates.size() == 1);
-    CHECK(candidates[0].consume_key == 3);
-    CHECK(!candidates[0].consume_placed);
+    CHECK(candidates[0].keep_key == 3);
+    CHECK(candidates[0].consume_key == 5);
 }
 
 void DifferentItemsDoNotCombine() {
@@ -290,7 +252,7 @@ void UnknownPlacementFlagDoesNotCombine() {
 void CandidateOrderIsDeterministic() {
     const auto candidates = cdf::FindCandidates(
         Snapshot({Item(9, "table"), Item(8, "table"),
-                  Item(4, "chair", 0, false, 1), Item(7, "chair")}),
+                  Item(4, "chair"), Item(7, "chair")}),
         Catalog());
     CHECK(candidates.size() == 2);
     CHECK(candidates[0].item_id == "chair");
@@ -304,8 +266,8 @@ void SealedBatchRequiresSameStoredMaterials() {
         Snapshot({
             Item(1),
             Item(2),
-            Item(3, "table", 0, false, 1),
-            Item(4, "table", 0, false, 1)}),
+            Item(3, "table"),
+            Item(4, "table")}),
         Catalog());
     CHECK(sealed.size() == 2);
 
@@ -314,10 +276,6 @@ void SealedBatchRequiresSameStoredMaterials() {
         Catalog());
     CHECK(cdf::RemainingCandidatesMatch(sealed, 0, refreshed));
     CHECK(cdf::RemainingCandidatesMatch(sealed, 1, {refreshed[1]}));
-
-    auto still_placed = refreshed;
-    still_placed[1].consume_placed = true;
-    CHECK(!cdf::RemainingCandidatesMatch(sealed, 0, still_placed));
 
     auto changed = refreshed;
     changed[1].consume_key = 99;
@@ -445,12 +403,6 @@ void RareConversionFailureLeavesBothOrdinary() {
         [](const auto& item) { return item.IsRare(); }));
 }
 
-void DeletePendingIsNotCandidate() {
-    CHECK(cdf::FindCandidates(
-        Snapshot({Item(1), Item(2, "chair", 0, true)}),
-        Catalog()).empty());
-}
-
 void DuplicateStableKeysAreRejected() {
     const auto snapshot = Snapshot({Item(1), Item(1)});
     CHECK(cdf::HasDuplicateStableKeys(snapshot.furniture));
@@ -463,11 +415,8 @@ int main() {
     const std::vector<std::pair<const char*, std::function<void()>>> tests{
         {"same ordinary", SameOrdinaryCreatesCandidate},
         {"all ordinary pairs", MultipleOrdinaryCreatesAllPairs},
-        {"stored material preferred", StoredMaterialIsPreferred},
-        {"placed material confirmation", TwoPlacedRequireStoreConfirmation},
-        {"unavailable placed kept", UnavailablePlacedIsNeverConsumed},
-        {"two unavailable placed skipped", TwoUnavailablePlacedAreSkipped},
-        {"stored consume priority", StoredConsumeStillHasPriority},
+        {"room furniture skipped", FurnitureInRoomsIsSkipped},
+        {"stored pair with room copy", RoomFurnitureDoesNotBlockStoredPair},
         {"different item", DifferentItemsDoNotCombine},
         {"ordinary rare", OrdinaryAndRareDoNotCombine},
         {"two rare", TwoRareCreateConsolidationCandidate},
@@ -485,7 +434,6 @@ int main() {
         {"rare consume failure", RareConsumeFailureRollsBackEnhancement},
         {"enhanced failure", EnhancedConversionFailureLeavesBothRare},
         {"rare failure", RareConversionFailureLeavesBothOrdinary},
-        {"delete pending", DeletePendingIsNotCandidate},
         {"duplicate stable key", DuplicateStableKeysAreRejected}};
     for (const auto& [name, test] : tests) {
         test();
@@ -497,6 +445,6 @@ int main() {
         std::cerr << g_failures << " focused checks failed\n";
         return EXIT_FAILURE;
     }
-    std::cout << "All 26 focused checks passed\n";
+    std::cout << "All " << tests.size() << " focused checks passed\n";
     return EXIT_SUCCESS;
 }

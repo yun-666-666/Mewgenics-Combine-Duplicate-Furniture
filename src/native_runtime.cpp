@@ -3,62 +3,16 @@
 #include "native_api.h"
 
 #include <algorithm>
-#include <iomanip>
-#include <sstream>
 #include <vector>
 
 namespace cdf {
 
-namespace {
-
-std::string FormatStoreProbe(const CdfNativeStoreResult& result) {
-    const auto has = [&result](std::uint32_t flag) {
-        return (result.probe_flags & flag) != 0U;
-    };
-    std::ostringstream output;
-    output << "probe=0x" << std::hex << result.probe_flags << std::dec
-           << " input=" << has(CDF_STORE_PROBE_INPUT_VALID)
-           << " signatures=" << has(CDF_STORE_PROBE_SIGNATURES_VALID)
-           << " entry=" << has(CDF_STORE_PROBE_ENTRY_FOUND)
-           << " piece=" << has(CDF_STORE_PROBE_PIECE_FOUND)
-           << " piece_count=" << result.piece_count
-           << " count_one=" << has(CDF_STORE_PROBE_PIECE_COUNT_ONE)
-           << " entry_flags=0x" << std::hex << result.entry_flags << std::dec
-           << " flags_valid=" << has(CDF_STORE_PROBE_FLAGS_VALID)
-           << " before_room_read=" << has(CDF_STORE_PROBE_BEFORE_ROOM_READ)
-           << " before_room_nonempty="
-           << has(CDF_STORE_PROBE_BEFORE_ROOM_NONEMPTY)
-           << " before_room=\"" << result.before_room << '"'
-           << " before_grid=" << has(CDF_STORE_PROBE_BEFORE_GRID_PRESENT)
-           << " before_entry_match="
-           << has(CDF_STORE_PROBE_BEFORE_ENTRY_MATCH)
-           << " call_completed=" << has(CDF_STORE_PROBE_CALL_COMPLETED)
-           << " after_delete_queued="
-           << has(CDF_STORE_PROBE_AFTER_DELETE_QUEUED)
-           << " after_room_read=" << has(CDF_STORE_PROBE_AFTER_ROOM_READ)
-           << " after_room_empty=" << has(CDF_STORE_PROBE_AFTER_ROOM_EMPTY)
-           << " after_room=\"" << result.after_room << '"'
-           << " after_grid_null=" << has(CDF_STORE_PROBE_AFTER_GRID_NULL)
-           << " after_entry_null=" << has(CDF_STORE_PROBE_AFTER_ENTRY_NULL)
-           << " after_storage_entry_same="
-           << has(CDF_STORE_PROBE_AFTER_STORAGE_ENTRY_SAME)
-           << " after_scene_contains="
-           << has(CDF_STORE_PROBE_AFTER_SCENE_CONTAINS);
-    return output.str();
-}
-
-}  // namespace
-
-NativeTransactionPort::NativeTransactionPort(void* scene_manager) noexcept
-    : scene_manager_(scene_manager) {}
-
 ScanSnapshot NativeTransactionPort::Scan() {
     std::vector<CdfNativeFurniture> native(4096);
-    const auto scanned = cdf_native_scan(
-        scene_manager_, native.data(), native.size());
-    signatures_valid_ = scanned.signatures_valid != 0;
+    const auto scanned = cdf_native_scan(native.data(), native.size());
+    runtime_available_ = scanned.runtime_available != 0;
     ScanSnapshot result;
-    result.complete = scanned.complete != 0 && signatures_valid_;
+    result.complete = scanned.complete != 0 && runtime_available_;
     result.furniture.reserve(scanned.count);
     for (std::size_t index = 0; index < scanned.count; ++index) {
         const auto& instance = native[index];
@@ -66,9 +20,7 @@ ScanSnapshot NativeTransactionPort::Scan() {
             instance.stable_key,
             instance.item_id,
             instance.room_id,
-            instance.placement_flags,
-            instance.delete_pending != 0,
-            instance.runtime_match_count});
+            instance.placement_flags});
     }
     return result;
 }
@@ -136,44 +88,34 @@ bool NativeTransactionPort::Consume(
     const std::string& item_id,
     std::uint64_t expected_flags) {
     const auto result = cdf_native_consume(
-        scene_manager_, stable_key, item_id.c_str(), expected_flags);
+        stable_key, item_id.c_str(), expected_flags);
     last_failure_ = {result.seh_code, result.exception_rva};
     return result.success != 0;
 }
 
-bool NativeTransactionPort::Store(
-    std::uint64_t stable_key,
-    const std::string& item_id) {
-    const auto result = cdf_native_store(
-        scene_manager_, stable_key, item_id.c_str());
-    last_failure_ = {result.seh_code, result.exception_rva};
-    last_stored_component_ = result.pending_component;
-    last_store_probe_summary_ = FormatStoreProbe(result);
-    return result.success != 0;
-}
-
-bool NativeTransactionPort::SignaturesValid() const noexcept {
-    return signatures_valid_;
+bool NativeTransactionPort::RuntimeAvailable() const noexcept {
+    return runtime_available_;
 }
 
 NativeFailure NativeTransactionPort::LastFailure() const noexcept {
     return last_failure_;
 }
 
-void* NativeTransactionPort::LastStoredComponent() const noexcept {
-    return last_stored_component_;
+RuntimeResolution ResolveRuntime() noexcept {
+    const auto resolution = cdf_native_resolve_runtime();
+    return {
+        resolution.scene_ready_hook_rva,
+        resolution.furniture_mode_enter_hook_rva,
+        resolution.core_available != 0,
+        resolution.ui_refresh_available != 0};
 }
 
-const std::string& NativeTransactionPort::LastStoreProbeSummary() const noexcept {
-    return last_store_probe_summary_;
+void* FurnitureModeComponent(void* mode_enter_context) noexcept {
+    return cdf_native_furniture_mode_component(mode_enter_context);
 }
 
-bool FurnitureModeActive(void* scene_manager) noexcept {
-    return cdf_native_furniture_mode_active(scene_manager) != 0;
-}
-
-bool FurnitureModeEnterRefreshSupported() noexcept {
-    return cdf_native_furniture_mode_enter_refresh_supported() != 0;
+bool FurnitureModeActive(void* component) noexcept {
+    return cdf_native_furniture_mode_active(component) != 0;
 }
 
 FurnitureUiRebuildResult PrepareFurnitureUiRebuildOnEnter(
@@ -187,12 +129,6 @@ FurnitureUiRebuildResult PrepareFurnitureUiRebuildOnEnter(
         static_cast<FurnitureUiRebuildStatus>(result.status),
         result.rows_scanned,
         result.rows_invalidated};
-}
-
-bool SceneContainsComponent(
-    void* scene_manager,
-    const void* component) noexcept {
-    return cdf_native_scene_contains_component(scene_manager, component) != 0;
 }
 
 EnhancedPatchAudit EnsureEnhancedFurniturePatches() noexcept {

@@ -1,7 +1,7 @@
 {
   "title": "Combine Duplicate Furniture",
-  "description": "Press F8 in furniture mode, then leave the furniture screen to safely batch-combine identical furniture. External dialogs are disabled by default.",
+  "description": "Move duplicate furniture into inventory, press F8 in furniture mode, then leave the screen to combine it. Furniture still placed in rooms is ignored.",
   "author": "OpenAI GPT-5",
-  "version": "0.6.15",
+  "version": "0.6.17",
   "requirements": []
 }

@@ -6,44 +6,12 @@
 #include <string.h>
 
 enum {
-    CDF_SCENE_READY_UPDATE_RVA = 0x962820,
-    CDF_FURNITURE_STORAGE_DELETE_RVA = 0x2052E0,
-    CDF_FURNITURE_STORE_PIECE_RVA = 0x2EF0D0,
-    CDF_FURNITURE_STORAGE_GLOBAL_RVA = 0x13D16E0,
-    CDF_FURNITURE_LIST_EFFECT_COUNT_RVA = 0x2EA2D7,
-    CDF_FURNITURE_LIST_VALUE_FLAGS_1_RVA = 0x1A0012,
-    CDF_FURNITURE_LIST_VALUE_FLAGS_2_RVA = 0x1A0097,
-    CDF_FURNITURE_DETAIL_VALUE_FLAGS_1_RVA = 0x1A11F6,
-    CDF_FURNITURE_DETAIL_VALUE_FLAGS_2_RVA = 0x1A1276,
-    CDF_FURNITURE_SORT_VALUE_FLAGS_1_RVA = 0x1A58AD,
-    CDF_FURNITURE_SORT_VALUE_FLAGS_2_RVA = 0x1A5922,
-    CDF_FURNITURE_REBUILD_RVA = 0x1A5470,
-    CDF_FURNITURE_ROW_CACHE_RVA = 0x1A5D6C,
-    CDF_FURNITURE_ROW_KEY_ASSIGN_RVA = 0x1A0FC9,
-    CDF_FURNITURE_STALE_ROW_CLEANUP_RVA = 0x1A614A,
-    CDF_FURNITURE_MODE_ENTER_FUNCTION_RVA = 0x1AB940,
-    CDF_FURNITURE_MODE_ENTER_REBUILD_RVA = 0x1AB95E,
-    CDF_FURNITURE_PIECE_VTABLE_RVA = 0xEDE690,
-    CDF_FURNITURE_BUILDING_UI_VTABLE_RVA = 0xF082A8,
-    CDF_SCENE_COMPONENT_LIST_OFFSET = 0x18,
-    CDF_FURNITURE_REBUILD_DIRTY_OFFSET = 0x58,
-    CDF_FURNITURE_MODE_ACTIVE_OFFSET = 0x78,
-    CDF_FURNITURE_UI_CONTEXT_OFFSET = 0x18,
-    CDF_FURNITURE_UI_ROOT_OFFSET = 0x08,
-    CDF_FURNITURE_UI_COMPONENT_TABLE_OFFSET = 0x20,
-    CDF_FURNITURE_ROW_COLLECTION_OFFSET = 0x3EF0,
-    CDF_FURNITURE_ROW_COLLECTION_COUNT_OFFSET = 0x0C,
-    CDF_FURNITURE_ROW_COLLECTION_DATA_OFFSET = 0x10,
-    CDF_FURNITURE_ROW_STABLE_KEY_OFFSET = 0x48,
-    CDF_COMPONENT_CONTEXT_OFFSET = 0x18,
-    CDF_CONTEXT_DELETE_STATE_OFFSET = 0x18,
-    CDF_PIECE_GRID_OFFSET = 0x48,
-    CDF_PIECE_ENTRY_OFFSET = 0x2D8,
     CDF_ENTRY_ITEM_OFFSET = 0x08,
     CDF_ENTRY_FLAGS_OFFSET = 0x28,
     CDF_ENTRY_ROOM_OFFSET = 0x30,
-    CDF_STORAGE_COUNT_OFFSET = 0x3C,
-    CDF_STORAGE_DATA_OFFSET = 0x40
+    CDF_COLLECTION_COUNT_OFFSET = 0x0C,
+    CDF_COLLECTION_DATA_OFFSET = 0x10,
+    CDF_VALUE_PATCH_SITE_COUNT = 6
 };
 
 typedef struct CdfNarrowString {
@@ -55,35 +23,38 @@ typedef struct CdfNarrowString {
     uint64_t capacity;
 } CdfNarrowString;
 
-typedef struct CdfPointerVector {
-    uint32_t capacity;
-    uint32_t size;
-    void** data;
-} CdfPointerVector;
-
 typedef void (__fastcall* CdfStorageDeleteFn)(void*, uint64_t);
-typedef void (__fastcall* CdfStorePieceFn)(void*);
 
-static int cdf_readable(const void* pointer, size_t byte_count);
+typedef struct CdfExecutableRange {
+    uint8_t* data;
+    size_t size;
+} CdfExecutableRange;
 
-static int cdf_patch_bytes(
-    uint8_t* address,
-    const uint8_t* expected,
-    const uint8_t* replacement,
-    size_t size) {
-    DWORD old_protect;
-    DWORD ignored;
-    if (!address || !expected || !replacement || size == 0U ||
-        !cdf_readable(address, size) ||
-        memcmp(address, expected, size) != 0 ||
-        !VirtualProtect(address, size, PAGE_EXECUTE_READWRITE, &old_protect)) {
-        return 0;
-    }
-    memcpy(address, replacement, size);
-    FlushInstructionCache(GetCurrentProcess(), address, size);
-    VirtualProtect(address, size, old_protect, &ignored);
-    return memcmp(address, replacement, size) == 0;
-}
+typedef struct CdfRuntimeState {
+    int attempted;
+    uint8_t* executable;
+    uint32_t image_size;
+    uintptr_t scene_ready_hook_rva;
+    uintptr_t furniture_mode_enter_hook_rva;
+    CdfStorageDeleteFn storage_delete;
+    void** storage_global_slot;
+    size_t storage_count_offset;
+    size_t storage_data_offset;
+    size_t furniture_mode_active_offset;
+    size_t furniture_rebuild_dirty_offset;
+    size_t furniture_ui_context_offset;
+    size_t furniture_ui_root_offset;
+    size_t furniture_ui_table_offset;
+    size_t furniture_row_collection_offset;
+    size_t furniture_row_stable_key_offset;
+    uint8_t* value_patch_sites[CDF_VALUE_PATCH_SITE_COUNT];
+    size_t value_patch_site_count;
+    uint8_t* count_patch_site;
+    int core_available;
+    int ui_refresh_available;
+} CdfRuntimeState;
+
+static CdfRuntimeState g_runtime;
 
 static int cdf_readable(const void* pointer, size_t byte_count) {
     uintptr_t current;
@@ -181,161 +152,350 @@ static LONG cdf_capture_exception(
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
-static int cdf_signature(
+static size_t cdf_executable_ranges(
+    uint8_t* executable,
+    CdfExecutableRange* ranges,
+    size_t capacity) {
+    IMAGE_DOS_HEADER* dos;
+    IMAGE_NT_HEADERS64* nt;
+    IMAGE_SECTION_HEADER* section;
+    size_t count = 0U;
+    uint16_t index;
+    if (!executable || !ranges || capacity == 0U) {
+        return 0U;
+    }
+    dos = (IMAGE_DOS_HEADER*)executable;
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
+        return 0U;
+    }
+    nt = (IMAGE_NT_HEADERS64*)(executable + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE ||
+        nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
+        return 0U;
+    }
+    section = IMAGE_FIRST_SECTION(nt);
+    for (index = 0; index < nt->FileHeader.NumberOfSections; ++index) {
+        size_t size;
+        if ((section[index].Characteristics & IMAGE_SCN_MEM_EXECUTE) == 0U) {
+            continue;
+        }
+        size = section[index].Misc.VirtualSize;
+        if (size == 0U) {
+            size = section[index].SizeOfRawData;
+        }
+        if (size == 0U || count == capacity) {
+            continue;
+        }
+        ranges[count].data = executable + section[index].VirtualAddress;
+        ranges[count].size = size;
+        ++count;
+    }
+    return count;
+}
+
+static int cdf_pattern_matches(
     const uint8_t* address,
-    const uint8_t* expected,
-    size_t size) {
-    return cdf_readable(address, size) &&
-        memcmp(address, expected, size) == 0;
-}
-
-static int cdf_signatures_valid(void) {
-    static const uint8_t delete_signature[] = {
-        0x40, 0x57, 0x48, 0x83, 0xEC, 0x20,
-        0x44, 0x8B, 0x51, 0x3C,
-        0x45, 0x33, 0xC0};
-    static const uint8_t store_signature[] = {
-        0x40, 0x53, 0x48, 0x83, 0xEC, 0x20,
-        0x48, 0x8B, 0xD9,
-        0xE8, 0xF2, 0xF2, 0xFF, 0xFF};
-    const uint8_t* executable = (const uint8_t*)GetModuleHandleW(NULL);
-    return executable &&
-        cdf_signature(
-            executable + CDF_FURNITURE_STORAGE_DELETE_RVA,
-            delete_signature,
-            sizeof(delete_signature)) &&
-        cdf_signature(
-            executable + CDF_FURNITURE_STORE_PIECE_RVA,
-            store_signature,
-            sizeof(store_signature));
-}
-
-static int cdf_furniture_rebuild_runtime_signatures_valid(void) {
-    static const uint8_t rebuild_signature[] = {
-        0x40, 0x57, 0x48, 0x83, 0xEC, 0x40,
-        0x80, 0x79, 0x58, 0x00};
-    static const uint8_t mode_enter_signature[] = {
-        0xC6, 0x40, 0x78, 0x01,
-        0x48, 0x8B, 0x79, 0x08,
-        0x48, 0x8B, 0xCF,
-        0xE8, 0x02, 0x9B, 0xFF, 0xFF};
-    static const uint8_t row_cache_signature[] = {
-        0x49, 0x8B, 0x46, 0x18,
-        0x48, 0x8B, 0x58, 0x08,
-        0xBA, 0xEF, 0x03, 0x00, 0x00,
-        0x48, 0x8B, 0xCB,
-        0xE8, 0xBF, 0xD2, 0x7B, 0x00,
-        0x48, 0x8B, 0x43, 0x20,
-        0x48, 0x8B, 0x88, 0xF0, 0x3E, 0x00, 0x00};
-    static const uint8_t row_key_signature[] = {
-        0x49, 0x89, 0x5E, 0x48};
-    static const uint8_t stale_row_cleanup_signature[] = {
-        0x48, 0x8B, 0x7C, 0x24, 0x28,
-        0x48, 0x8B, 0x1F,
-        0x48, 0x3B, 0xDF,
-        0x74, 0x16};
-    const uint8_t* executable =
-        (const uint8_t*)GetModuleHandleW(NULL);
-    return executable &&
-        cdf_signature(
-            executable + CDF_FURNITURE_REBUILD_RVA,
-            rebuild_signature,
-            sizeof(rebuild_signature)) &&
-        cdf_signature(
-            executable + CDF_FURNITURE_MODE_ENTER_REBUILD_RVA,
-            mode_enter_signature,
-            sizeof(mode_enter_signature)) &&
-        cdf_signature(
-            executable + CDF_FURNITURE_ROW_CACHE_RVA,
-            row_cache_signature,
-            sizeof(row_cache_signature)) &&
-        cdf_signature(
-            executable + CDF_FURNITURE_ROW_KEY_ASSIGN_RVA,
-            row_key_signature,
-            sizeof(row_key_signature)) &&
-        cdf_signature(
-            executable + CDF_FURNITURE_STALE_ROW_CLEANUP_RVA,
-            stale_row_cleanup_signature,
-            sizeof(stale_row_cleanup_signature));
-}
-
-static int cdf_furniture_mode_enter_hook_signature_valid(void) {
-    static const uint8_t mode_enter_function_signature[] = {
-        0x48, 0x89, 0x5C, 0x24, 0x10,
-        0x48, 0x89, 0x6C, 0x24, 0x18,
-        0x48, 0x89, 0x74, 0x24, 0x20};
-    const uint8_t* executable =
-        (const uint8_t*)GetModuleHandleW(NULL);
-    return executable &&
-        cdf_signature(
-            executable + CDF_FURNITURE_MODE_ENTER_FUNCTION_RVA,
-            mode_enter_function_signature,
-            sizeof(mode_enter_function_signature)) &&
-        cdf_furniture_rebuild_runtime_signatures_valid();
-}
-
-static int cdf_valid_vtable(
-    const void* object,
-    uintptr_t expected_rva) {
-    const uint8_t* executable = (const uint8_t*)GetModuleHandleW(NULL);
-    return executable && cdf_readable(object, sizeof(void*)) &&
-        *(void* const*)object == executable + expected_rva;
-}
-
-static int cdf_delete_queued(void* component) {
-    void* context;
-    if (!component || !cdf_readable(
-            component, CDF_COMPONENT_CONTEXT_OFFSET + sizeof(void*))) {
-        return 0;
-    }
-    __try {
-        context = *(void**)((uint8_t*)component +
-            CDF_COMPONENT_CONTEXT_OFFSET);
-        return context && cdf_readable(
-                context, CDF_CONTEXT_DELETE_STATE_OFFSET + 1U) &&
-            *(uint8_t*)((uint8_t*)context +
-                CDF_CONTEXT_DELETE_STATE_OFFSET) != 0U;
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
-    }
-}
-
-static int cdf_scene_components(
-    void* scene_manager,
-    void*** data,
-    uint32_t* count) {
-    CdfPointerVector* components;
-    if (!scene_manager || !data || !count || !cdf_readable(
-            scene_manager, CDF_SCENE_COMPONENT_LIST_OFFSET + sizeof(void*))) {
-        return 0;
-    }
-    __try {
-        components = *(CdfPointerVector**)((uint8_t*)scene_manager +
-            CDF_SCENE_COMPONENT_LIST_OFFSET);
-        if (!components || !cdf_readable(components, sizeof(*components)) ||
-            components->size > components->capacity) {
+    const int16_t* pattern,
+    size_t pattern_size) {
+    size_t index;
+    for (index = 0; index < pattern_size; ++index) {
+        if (pattern[index] >= 0 && address[index] != (uint8_t)pattern[index]) {
             return 0;
         }
-        *count = components->size;
-        *data = components->data;
     }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
+    return 1;
+}
+
+static size_t cdf_find_pattern(
+    const int16_t* pattern,
+    size_t pattern_size,
+    uint8_t** output,
+    size_t output_capacity) {
+    CdfExecutableRange ranges[16];
+    size_t range_count;
+    size_t found = 0U;
+    size_t range_index;
+    range_count = cdf_executable_ranges(
+        g_runtime.executable, ranges, sizeof(ranges) / sizeof(ranges[0]));
+    for (range_index = 0; range_index < range_count; ++range_index) {
+        size_t offset;
+        if (ranges[range_index].size < pattern_size) {
+            continue;
+        }
+        for (offset = 0;
+             offset <= ranges[range_index].size - pattern_size;
+             ++offset) {
+            uint8_t* address = ranges[range_index].data + offset;
+            if (!cdf_pattern_matches(address, pattern, pattern_size)) {
+                continue;
+            }
+            if (found < output_capacity) {
+                output[found] = address;
+            }
+            ++found;
+        }
+    }
+    return found;
+}
+
+static uint8_t* cdf_find_unique(
+    const int16_t* pattern,
+    size_t pattern_size) {
+    uint8_t* result = NULL;
+    return cdf_find_pattern(pattern, pattern_size, &result, 1U) == 1U
+        ? result
+        : NULL;
+}
+
+static uint8_t* cdf_rip_target(
+    uint8_t* instruction,
+    size_t displacement_offset,
+    size_t instruction_size) {
+    int32_t displacement;
+    memcpy(
+        &displacement,
+        instruction + displacement_offset,
+        sizeof(displacement));
+    return instruction + instruction_size + displacement;
+}
+
+static void cdf_collect_value_patch_sites(void) {
+    static const int16_t list_pattern[] = {
+        0x80, 0xE3, -1, 0x49, 0x8D, 0x56, 0x08,
+        0x48, 0x8D, 0x4D, 0xE0, 0xE8};
+    static const int16_t detail_pattern[] = {
+        0x80, 0xE3, -1, 0x48, 0x8D, 0x56, 0x08,
+        0x48, 0x8D, 0x4C, 0x24, 0x30, 0xE8};
+    static const int16_t sort_pattern[] = {
+        0x80, 0xE3, -1, 0x48, 0x83, 0xC2, 0x08,
+        0x48, 0x8D, 0x4D, 0xC0, 0xE8};
+    const int16_t* patterns[] = {
+        list_pattern, detail_pattern, sort_pattern};
+    const size_t sizes[] = {
+        sizeof(list_pattern) / sizeof(list_pattern[0]),
+        sizeof(detail_pattern) / sizeof(detail_pattern[0]),
+        sizeof(sort_pattern) / sizeof(sort_pattern[0])};
+    size_t pattern_index;
+    g_runtime.value_patch_site_count = 0U;
+    for (pattern_index = 0;
+         pattern_index < sizeof(patterns) / sizeof(patterns[0]);
+         ++pattern_index) {
+        uint8_t* matches[CDF_VALUE_PATCH_SITE_COUNT];
+        size_t found = cdf_find_pattern(
+            patterns[pattern_index],
+            sizes[pattern_index],
+            matches,
+            CDF_VALUE_PATCH_SITE_COUNT);
+        size_t match_index;
+        if (found > CDF_VALUE_PATCH_SITE_COUNT) {
+            g_runtime.value_patch_site_count = 0U;
+            return;
+        }
+        for (match_index = 0; match_index < found; ++match_index) {
+            if ((matches[match_index][2] != 0x01U &&
+                 matches[match_index][2] != 0x03U) ||
+                g_runtime.value_patch_site_count ==
+                    CDF_VALUE_PATCH_SITE_COUNT) {
+                g_runtime.value_patch_site_count = 0U;
+                return;
+            }
+            g_runtime.value_patch_sites[
+                g_runtime.value_patch_site_count++] = matches[match_index];
+        }
+    }
+    if (g_runtime.value_patch_site_count != CDF_VALUE_PATCH_SITE_COUNT) {
+        g_runtime.value_patch_site_count = 0U;
+    }
+}
+
+static void cdf_resolve_runtime_once(void) {
+    static const int16_t scene_ready_pattern[] = {
+        0x48, 0x89, 0x5C, 0x24, 0x10,
+        0x48, 0x89, 0x6C, 0x24, 0x18,
+        0x57, 0x48, 0x83, 0xEC, 0x20,
+        0x48, 0x8B, 0xF9, 0x48, 0x89, 0x0D,
+        -1, -1, -1, -1,
+        0x48, 0x81, 0xC1, 0xE0, 0x04, 0x00, 0x00,
+        0x48, 0x89, 0x74, 0x24, 0x30,
+        0xC7, 0x05, -1, -1, -1, -1,
+        0x01, 0x00, 0x00, 0x00};
+    static const int16_t mode_enter_pattern[] = {
+        0x48, 0x89, 0x5C, 0x24, 0x10,
+        0x48, 0x89, 0x6C, 0x24, 0x18,
+        0x48, 0x89, 0x74, 0x24, 0x20,
+        0x57, 0x48, 0x81, 0xEC, -1, -1, -1, -1,
+        0x48, 0x8B, 0x41, 0x08,
+        0x48, 0x8B, 0xE9, 0xC6, 0x40, -1, 0x01};
+    static const int16_t delete_pattern[] = {
+        0x40, 0x57, 0x48, 0x83, 0xEC, 0x20,
+        0x44, 0x8B, 0x51, 0x3C, 0x45, 0x33, 0xC0};
+    static const int16_t storage_pattern[] = {
+        0x49, 0x89, 0x5E, -1,
+        0x48, 0x8B, 0x05, -1, -1, -1, -1,
+        0x48, 0x8B, 0x48, -1,
+        0x8B, 0x40, -1,
+        0x48, 0x8D, 0x14, 0xC1,
+        0x48, 0x3B, 0xCA, 0x74, 0x11};
+    static const int16_t rebuild_pattern[] = {
+        0x40, 0x57, 0x48, 0x83, 0xEC, -1,
+        0x80, 0x79, -1, 0x00,
+        0x48, 0x8B, 0xF9,
+        0x0F, 0x84, -1, -1, -1, -1,
+        0xC6, 0x41, -1, 0x00};
+    static const int16_t row_cache_pattern[] = {
+        0x49, 0x8B, 0x46, -1,
+        0x48, 0x8B, 0x58, -1,
+        0xBA, 0xEF, 0x03, 0x00, 0x00,
+        0x48, 0x8B, 0xCB, 0xE8, -1, -1, -1, -1,
+        0x48, 0x8B, 0x43, -1,
+        0x48, 0x8B, 0x88, -1, -1, -1, -1};
+    static const int16_t count_original_pattern[] = {
+        0xF6, 0x42, 0x28, 0x02,
+        0xB8, 0x00, 0x00, 0x00, 0x00,
+        0x0F, 0x95, 0xC0, 0xFF, 0xC0};
+    static const int16_t count_patched_pattern[] = {
+        0x8B, 0x42, 0x28,
+        0x83, 0xE0, 0x06,
+        0xD1, 0xE8,
+        0xFF, 0xC0,
+        0x90, 0x90, 0x90, 0x90};
+    uint8_t* scene_ready;
+    uint8_t* mode_enter;
+    uint8_t* storage_anchor;
+    uint8_t* rebuild;
+    uint8_t* row_cache;
+    uint8_t* count_original;
+    uint8_t* count_patched;
+    int32_t collection_offset;
+
+    if (g_runtime.attempted) {
+        return;
+    }
+    memset(&g_runtime, 0, sizeof(g_runtime));
+    g_runtime.attempted = 1;
+    g_runtime.executable = (uint8_t*)GetModuleHandleW(NULL);
+    g_runtime.image_size = cdf_image_size((HMODULE)g_runtime.executable);
+    if (!g_runtime.executable || g_runtime.image_size == 0U) {
+        return;
+    }
+
+    scene_ready = cdf_find_unique(
+        scene_ready_pattern,
+        sizeof(scene_ready_pattern) / sizeof(scene_ready_pattern[0]));
+    mode_enter = cdf_find_unique(
+        mode_enter_pattern,
+        sizeof(mode_enter_pattern) / sizeof(mode_enter_pattern[0]));
+    g_runtime.storage_delete = (CdfStorageDeleteFn)cdf_find_unique(
+        delete_pattern,
+        sizeof(delete_pattern) / sizeof(delete_pattern[0]));
+    storage_anchor = cdf_find_unique(
+        storage_pattern,
+        sizeof(storage_pattern) / sizeof(storage_pattern[0]));
+    rebuild = cdf_find_unique(
+        rebuild_pattern,
+        sizeof(rebuild_pattern) / sizeof(rebuild_pattern[0]));
+    row_cache = cdf_find_unique(
+        row_cache_pattern,
+        sizeof(row_cache_pattern) / sizeof(row_cache_pattern[0]));
+
+    if (scene_ready) {
+        g_runtime.scene_ready_hook_rva =
+            (uintptr_t)(scene_ready - g_runtime.executable);
+    }
+    if (mode_enter) {
+        g_runtime.furniture_mode_enter_hook_rva =
+            (uintptr_t)(mode_enter - g_runtime.executable);
+        g_runtime.furniture_mode_active_offset = mode_enter[32];
+    }
+    if (storage_anchor) {
+        g_runtime.furniture_row_stable_key_offset = storage_anchor[3];
+        g_runtime.storage_global_slot = (void**)cdf_rip_target(
+            storage_anchor + 4U, 3U, 7U);
+        g_runtime.storage_data_offset = storage_anchor[14];
+        g_runtime.storage_count_offset = storage_anchor[17];
+    }
+    if (rebuild && rebuild[8] == rebuild[21]) {
+        g_runtime.furniture_rebuild_dirty_offset = rebuild[8];
+    }
+    if (row_cache) {
+        g_runtime.furniture_ui_context_offset = row_cache[3];
+        g_runtime.furniture_ui_root_offset = row_cache[7];
+        g_runtime.furniture_ui_table_offset = row_cache[24];
+        memcpy(&collection_offset, row_cache + 28U, sizeof(collection_offset));
+        if (collection_offset > 0) {
+            g_runtime.furniture_row_collection_offset =
+                (size_t)collection_offset;
+        }
+    }
+
+    g_runtime.core_available =
+        g_runtime.scene_ready_hook_rva != 0U &&
+        g_runtime.furniture_mode_enter_hook_rva != 0U &&
+        g_runtime.storage_delete != NULL &&
+        cdf_readable(g_runtime.storage_global_slot, sizeof(void*)) &&
+        g_runtime.storage_data_offset != 0U &&
+        g_runtime.storage_count_offset != 0U;
+    g_runtime.ui_refresh_available =
+        g_runtime.furniture_mode_active_offset != 0U &&
+        g_runtime.furniture_rebuild_dirty_offset != 0U &&
+        g_runtime.furniture_ui_context_offset != 0U &&
+        g_runtime.furniture_ui_root_offset != 0U &&
+        g_runtime.furniture_ui_table_offset != 0U &&
+        g_runtime.furniture_row_collection_offset != 0U &&
+        g_runtime.furniture_row_stable_key_offset != 0U;
+
+    cdf_collect_value_patch_sites();
+    count_original = cdf_find_unique(
+        count_original_pattern,
+        sizeof(count_original_pattern) / sizeof(count_original_pattern[0]));
+    count_patched = cdf_find_unique(
+        count_patched_pattern,
+        sizeof(count_patched_pattern) / sizeof(count_patched_pattern[0]));
+    if ((count_original == NULL) != (count_patched == NULL)) {
+        g_runtime.count_patch_site = count_original
+            ? count_original
+            : count_patched;
+    }
+}
+
+static int cdf_patch_bytes(
+    uint8_t* address,
+    const uint8_t* expected,
+    const uint8_t* replacement,
+    size_t size) {
+    DWORD old_protect;
+    DWORD ignored;
+    if (!address || !expected || !replacement || size == 0U ||
+        !cdf_readable(address, size) ||
+        memcmp(address, expected, size) != 0 ||
+        !VirtualProtect(address, size, PAGE_EXECUTE_READWRITE, &old_protect)) {
         return 0;
     }
-    return *count <= 100000U &&
-        (*count == 0U || cdf_readable(*data, (size_t)*count * sizeof(void*)));
+    memcpy(address, replacement, size);
+    FlushInstructionCache(GetCurrentProcess(), address, size);
+    VirtualProtect(address, size, old_protect, &ignored);
+    return memcmp(address, replacement, size) == 0;
+}
+
+CdfRuntimeResolution cdf_native_resolve_runtime(void) {
+    CdfRuntimeResolution result;
+    cdf_resolve_runtime_once();
+    memset(&result, 0, sizeof(result));
+    result.scene_ready_hook_rva = g_runtime.scene_ready_hook_rva;
+    result.furniture_mode_enter_hook_rva =
+        g_runtime.furniture_mode_enter_hook_rva;
+    result.core_available = (uint8_t)g_runtime.core_available;
+    result.ui_refresh_available = (uint8_t)g_runtime.ui_refresh_available;
+    return result;
 }
 
 static void* cdf_storage(void) {
-    uint8_t* executable = (uint8_t*)GetModuleHandleW(NULL);
-    if (!executable || !cdf_readable(
-            executable + CDF_FURNITURE_STORAGE_GLOBAL_RVA,
-            sizeof(void*))) {
+    cdf_resolve_runtime_once();
+    if (!cdf_readable(g_runtime.storage_global_slot, sizeof(void*))) {
         return NULL;
     }
     __try {
-        return *(void**)(executable + CDF_FURNITURE_STORAGE_GLOBAL_RVA);
+        return *g_runtime.storage_global_slot;
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
         return NULL;
@@ -346,13 +506,19 @@ static int cdf_storage_entries(
     void* storage,
     void*** data,
     uint32_t* count) {
-    if (!storage || !data || !count || !cdf_readable(
-            storage, CDF_STORAGE_DATA_OFFSET + sizeof(void*))) {
+    size_t required;
+    if (!storage || !data || !count || !g_runtime.core_available) {
+        return 0;
+    }
+    required = g_runtime.storage_data_offset + sizeof(void*);
+    if (!cdf_readable(storage, required)) {
         return 0;
     }
     __try {
-        *count = *(uint32_t*)((uint8_t*)storage + CDF_STORAGE_COUNT_OFFSET);
-        *data = *(void***)((uint8_t*)storage + CDF_STORAGE_DATA_OFFSET);
+        *count = *(uint32_t*)((uint8_t*)storage +
+            g_runtime.storage_count_offset);
+        *data = *(void***)((uint8_t*)storage +
+            g_runtime.storage_data_offset);
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;
@@ -410,68 +576,36 @@ static void* cdf_find_entry(
     return found;
 }
 
-static void* cdf_find_piece(
-    void* scene_manager,
-    uint64_t stable_key,
-    uint32_t* match_count) {
-    void** components;
-    uint32_t component_count;
-    uint32_t index;
-    void* found = NULL;
-    *match_count = 0U;
-    if (!cdf_scene_components(scene_manager, &components, &component_count)) {
+void* cdf_native_furniture_mode_component(void* mode_enter_context) {
+    void* component;
+    cdf_resolve_runtime_once();
+    if (!mode_enter_context || !cdf_readable(
+            mode_enter_context, sizeof(void*) * 2U)) {
         return NULL;
     }
-    for (index = 0; index < component_count; ++index) {
-        void* component = components[index];
-        void* entry;
-        if (!cdf_valid_vtable(component, CDF_FURNITURE_PIECE_VTABLE_RVA) ||
-            cdf_delete_queued(component) || !cdf_readable(
-                component, CDF_PIECE_ENTRY_OFFSET + sizeof(void*))) {
-            continue;
-        }
-        __try {
-            entry = *(void**)((uint8_t*)component + CDF_PIECE_ENTRY_OFFSET);
-            if (!entry || !cdf_readable(entry, sizeof(uint64_t)) ||
-                *(uint64_t*)entry != stable_key) {
-                continue;
-            }
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER) {
-            continue;
-        }
-        ++*match_count;
-        found = component;
+    __try {
+        component = *(void**)((uint8_t*)mode_enter_context + sizeof(void*));
     }
-    return found;
-}
-
-static void* cdf_find_furniture_ui(void* scene_manager) {
-    void** components;
-    uint32_t count;
-    uint32_t index;
-    if (!cdf_scene_components(scene_manager, &components, &count)) {
+    __except (EXCEPTION_EXECUTE_HANDLER) {
         return NULL;
     }
-    for (index = 0; index < count; ++index) {
-        void* component = components[index];
-        if (cdf_valid_vtable(
-                component, CDF_FURNITURE_BUILDING_UI_VTABLE_RVA)) {
-            return component;
-        }
-    }
-    return NULL;
+    return component && g_runtime.furniture_mode_active_offset != 0U &&
+        cdf_readable(
+            component, g_runtime.furniture_mode_active_offset + 1U)
+        ? component
+        : NULL;
 }
 
-int cdf_native_furniture_mode_active(void* scene_manager) {
-    void* component = cdf_find_furniture_ui(scene_manager);
-    if (!component || !cdf_readable(
-            component, CDF_FURNITURE_MODE_ACTIVE_OFFSET + 1U)) {
+int cdf_native_furniture_mode_active(void* component) {
+    cdf_resolve_runtime_once();
+    if (!component || g_runtime.furniture_mode_active_offset == 0U ||
+        !cdf_readable(
+            component, g_runtime.furniture_mode_active_offset + 1U)) {
         return 0;
     }
     __try {
         return *(uint8_t*)((uint8_t*)component +
-            CDF_FURNITURE_MODE_ACTIVE_OFFSET) != 0U;
+            g_runtime.furniture_mode_active_offset) != 0U;
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;
@@ -486,52 +620,55 @@ static int cdf_furniture_ui_rows(
     void* root;
     void* table;
     void* collection;
-    if (!component || !rows || !count || !cdf_readable(
-            component, CDF_FURNITURE_UI_CONTEXT_OFFSET + sizeof(void*))) {
+    if (!component || !rows || !count || !g_runtime.ui_refresh_available ||
+        !cdf_readable(
+            component, g_runtime.furniture_ui_context_offset + sizeof(void*))) {
         return 0;
     }
     *rows = NULL;
     *count = 0U;
     __try {
         context = *(void**)((uint8_t*)component +
-            CDF_FURNITURE_UI_CONTEXT_OFFSET);
+            g_runtime.furniture_ui_context_offset);
         if (!context) {
             return 1;
         }
-        if (!cdf_readable(context, CDF_FURNITURE_UI_ROOT_OFFSET +
-                sizeof(void*))) {
+        if (!cdf_readable(
+                context, g_runtime.furniture_ui_root_offset + sizeof(void*))) {
             return 0;
         }
-        root = *(void**)((uint8_t*)context + CDF_FURNITURE_UI_ROOT_OFFSET);
+        root = *(void**)((uint8_t*)context +
+            g_runtime.furniture_ui_root_offset);
         if (!root) {
             return 1;
         }
-        if (!cdf_readable(root, CDF_FURNITURE_UI_COMPONENT_TABLE_OFFSET +
-                sizeof(void*))) {
+        if (!cdf_readable(
+                root, g_runtime.furniture_ui_table_offset + sizeof(void*))) {
             return 0;
         }
         table = *(void**)((uint8_t*)root +
-            CDF_FURNITURE_UI_COMPONENT_TABLE_OFFSET);
+            g_runtime.furniture_ui_table_offset);
         if (!table) {
             return 1;
         }
-        if (!cdf_readable(table,
-                CDF_FURNITURE_ROW_COLLECTION_OFFSET + sizeof(void*))) {
+        if (!cdf_readable(
+                table,
+                g_runtime.furniture_row_collection_offset + sizeof(void*))) {
             return 0;
         }
         collection = *(void**)((uint8_t*)table +
-            CDF_FURNITURE_ROW_COLLECTION_OFFSET);
+            g_runtime.furniture_row_collection_offset);
         if (!collection) {
             return 1;
         }
-        if (!cdf_readable(collection,
-                CDF_FURNITURE_ROW_COLLECTION_DATA_OFFSET + sizeof(void*))) {
+        if (!cdf_readable(
+                collection, CDF_COLLECTION_DATA_OFFSET + sizeof(void*))) {
             return 0;
         }
         *count = *(uint32_t*)((uint8_t*)collection +
-            CDF_FURNITURE_ROW_COLLECTION_COUNT_OFFSET);
+            CDF_COLLECTION_COUNT_OFFSET);
         *rows = *(void***)((uint8_t*)collection +
-            CDF_FURNITURE_ROW_COLLECTION_DATA_OFFSET);
+            CDF_COLLECTION_DATA_OFFSET);
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;
@@ -564,41 +701,31 @@ CdfFurnitureUiRebuildResult cdf_native_prepare_furniture_ui_rebuild_on_enter(
     uint32_t row_count = 0U;
     uint32_t index;
     memset(&result, 0, sizeof(result));
-    if (!mode_enter_context || !cdf_readable(
-            mode_enter_context, sizeof(void*) * 2U) ||
+    cdf_resolve_runtime_once();
+    if (!mode_enter_context ||
         (stale_row_key_count != 0U && !stale_row_keys)) {
         result.status = CDF_FURNITURE_UI_REBUILD_ENTER_CONTEXT_UNAVAILABLE;
         return result;
     }
-    if (!cdf_furniture_rebuild_runtime_signatures_valid()) {
-        result.status = CDF_FURNITURE_UI_REBUILD_SIGNATURE_MISMATCH;
+    if (!g_runtime.ui_refresh_available) {
+        result.status = CDF_FURNITURE_UI_REBUILD_LAYOUT_UNAVAILABLE;
+        return result;
+    }
+    component = cdf_native_furniture_mode_component(mode_enter_context);
+    if (!component) {
+        result.status = CDF_FURNITURE_UI_REBUILD_COMPONENT_UNAVAILABLE;
         return result;
     }
     __try {
-        component = *(void**)((uint8_t*)mode_enter_context + sizeof(void*));
-        if (!component) {
-            result.status = CDF_FURNITURE_UI_REBUILD_COMPONENT_UNAVAILABLE;
-            return result;
-        }
-        if (!cdf_valid_vtable(
-                component, CDF_FURNITURE_BUILDING_UI_VTABLE_RVA)) {
-            result.status = CDF_FURNITURE_UI_REBUILD_COMPONENT_INVALID;
-            return result;
-        }
-        if (!cdf_readable(
-                component, CDF_FURNITURE_MODE_ACTIVE_OFFSET + 1U)) {
-            result.status = CDF_FURNITURE_UI_REBUILD_COMPONENT_UNREADABLE;
-            return result;
-        }
         if (*(uint8_t*)((uint8_t*)component +
-                CDF_FURNITURE_MODE_ACTIVE_OFFSET) != 0U) {
+                g_runtime.furniture_mode_active_offset) != 0U) {
             result.status = CDF_FURNITURE_UI_REBUILD_MODE_ACTIVE;
             return result;
         }
         *(uint8_t*)((uint8_t*)component +
-            CDF_FURNITURE_REBUILD_DIRTY_OFFSET) = 1U;
+            g_runtime.furniture_rebuild_dirty_offset) = 1U;
         if (*(uint8_t*)((uint8_t*)component +
-                CDF_FURNITURE_REBUILD_DIRTY_OFFSET) == 0U) {
+                g_runtime.furniture_rebuild_dirty_offset) == 0U) {
             result.status = CDF_FURNITURE_UI_REBUILD_WRITE_FAILED;
             return result;
         }
@@ -612,17 +739,17 @@ CdfFurnitureUiRebuildResult cdf_native_prepare_furniture_ui_rebuild_on_enter(
             void* row = rows[index];
             uint64_t stable_key;
             if (!cdf_readable(
-                    row, CDF_FURNITURE_ROW_STABLE_KEY_OFFSET +
+                    row, g_runtime.furniture_row_stable_key_offset +
                         sizeof(uint64_t))) {
                 result.status = CDF_FURNITURE_UI_REBUILD_ROW_CACHE_UNREADABLE;
                 return result;
             }
             stable_key = *(uint64_t*)((uint8_t*)row +
-                CDF_FURNITURE_ROW_STABLE_KEY_OFFSET);
+                g_runtime.furniture_row_stable_key_offset);
             if (cdf_contains_stable_key(
                     stale_row_keys, stale_row_key_count, stable_key)) {
                 *(uint64_t*)((uint8_t*)row +
-                    CDF_FURNITURE_ROW_STABLE_KEY_OFFSET) =
+                    g_runtime.furniture_row_stable_key_offset) =
                     stable_key ^ (1ULL << 63U);
                 ++result.rows_invalidated;
             }
@@ -636,30 +763,7 @@ CdfFurnitureUiRebuildResult cdf_native_prepare_furniture_ui_rebuild_on_enter(
     }
 }
 
-int cdf_native_furniture_mode_enter_refresh_supported(void) {
-    return cdf_furniture_mode_enter_hook_signature_valid();
-}
-
-int cdf_native_scene_contains_component(
-    void* scene_manager,
-    const void* component) {
-    void** components;
-    uint32_t count;
-    uint32_t index;
-    if (!component ||
-        !cdf_scene_components(scene_manager, &components, &count)) {
-        return 0;
-    }
-    for (index = 0; index < count; ++index) {
-        if (components[index] == component) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
 CdfNativeScanResult cdf_native_scan(
-    void* scene_manager,
     CdfNativeFurniture* output,
     size_t output_capacity) {
     CdfNativeScanResult result;
@@ -668,8 +772,9 @@ CdfNativeScanResult cdf_native_scan(
     uint32_t count;
     uint32_t index;
     memset(&result, 0, sizeof(result));
-    result.signatures_valid = (uint8_t)cdf_signatures_valid();
-    if (!output || output_capacity == 0U || !scene_manager) {
+    cdf_resolve_runtime_once();
+    result.runtime_available = (uint8_t)g_runtime.core_available;
+    if (!output || output_capacity == 0U || !g_runtime.core_available) {
         return result;
     }
     storage = cdf_storage();
@@ -679,8 +784,6 @@ CdfNativeScanResult cdf_native_scan(
     result.complete = 1U;
     for (index = 0; index < count; ++index) {
         CdfNativeFurniture current;
-        uint32_t match_count;
-        void* piece;
         void* entry = entries[index];
         memset(&current, 0, sizeof(current));
         if (!entry || !cdf_readable(entry, 0x68U) ||
@@ -711,10 +814,6 @@ CdfNativeScanResult cdf_native_scan(
             result.complete = 0U;
             continue;
         }
-        piece = cdf_find_piece(
-            scene_manager, current.stable_key, &match_count);
-        current.piece = piece;
-        current.runtime_match_count = match_count;
         output[result.count++] = current;
     }
     return result;
@@ -729,7 +828,8 @@ CdfNativeMutationResult cdf_native_set_rare(
     uint64_t flags;
     void* entry;
     memset(&result, 0, sizeof(result));
-    if (!cdf_signatures_valid()) {
+    cdf_resolve_runtime_once();
+    if (!g_runtime.core_available) {
         return result;
     }
     entry = cdf_find_entry(stable_key, expected_item, &flags);
@@ -764,7 +864,8 @@ CdfNativeMutationResult cdf_native_set_enhanced(
     uint64_t flags;
     void* entry;
     memset(&result, 0, sizeof(result));
-    if (!cdf_signatures_valid()) {
+    cdf_resolve_runtime_once();
+    if (!g_runtime.core_available) {
         return result;
     }
     entry = cdf_find_entry(stable_key, expected_item, &flags);
@@ -792,146 +893,28 @@ CdfNativeMutationResult cdf_native_set_enhanced(
 }
 
 CdfNativeMutationResult cdf_native_consume(
-    void* scene_manager,
     uint64_t stable_key,
     const char* expected_item,
     uint64_t expected_flags) {
     CdfNativeMutationResult result;
-    uint8_t* executable = (uint8_t*)GetModuleHandleW(NULL);
     void* storage;
     void* entry;
     uint64_t flags;
-    uint32_t piece_count;
     memset(&result, 0, sizeof(result));
-    if (!scene_manager || !cdf_signatures_valid()) {
+    cdf_resolve_runtime_once();
+    if (!g_runtime.core_available) {
         return result;
     }
     storage = cdf_storage();
     entry = cdf_find_entry(stable_key, expected_item, &flags);
-    cdf_find_piece(scene_manager, stable_key, &piece_count);
     if (!storage || !entry || flags != expected_flags ||
-        (flags & ~6ULL) != 0ULL ||
-        piece_count != 0U) {
-        return result;
-    }
-    __try {
-        ((CdfStorageDeleteFn)(
-            executable + CDF_FURNITURE_STORAGE_DELETE_RVA))(
-                storage, stable_key);
-        result.success = (uint8_t)(
-            cdf_find_entry(stable_key, expected_item, NULL) == NULL);
-    }
-    __except (cdf_capture_exception(
-        GetExceptionInformation(), &result.seh_code, &result.exception_rva)) {
-        result.success = 0U;
-    }
-    return result;
-}
-
-CdfNativeStoreResult cdf_native_store(
-    void* scene_manager,
-    uint64_t stable_key,
-    const char* expected_item) {
-    CdfNativeStoreResult result;
-    uint8_t* executable = (uint8_t*)GetModuleHandleW(NULL);
-    void* entry;
-    void* piece;
-    uint64_t flags;
-    uint32_t piece_count;
-    void* before_grid;
-    void* before_piece_entry;
-    void* after_grid;
-    void* after_piece_entry;
-    memset(&result, 0, sizeof(result));
-    if (!scene_manager || !expected_item || expected_item[0] == '\0') {
-        return result;
-    }
-    result.probe_flags |= CDF_STORE_PROBE_INPUT_VALID;
-    if (!cdf_signatures_valid()) {
-        return result;
-    }
-    result.probe_flags |= CDF_STORE_PROBE_SIGNATURES_VALID;
-    entry = cdf_find_entry(stable_key, expected_item, &flags);
-    if (entry) {
-        result.probe_flags |= CDF_STORE_PROBE_ENTRY_FOUND;
-        result.entry_flags = flags;
-    }
-    piece = cdf_find_piece(scene_manager, stable_key, &piece_count);
-    result.piece_count = piece_count;
-    if (piece) {
-        result.probe_flags |= CDF_STORE_PROBE_PIECE_FOUND;
-    }
-    if (piece_count == 1U) {
-        result.probe_flags |= CDF_STORE_PROBE_PIECE_COUNT_ONE;
-    }
-    if (entry && (flags & ~6ULL) == 0ULL) {
-        result.probe_flags |= CDF_STORE_PROBE_FLAGS_VALID;
-    }
-    if (!entry || !piece || piece_count != 1U ||
         (flags & ~6ULL) != 0ULL) {
         return result;
     }
     __try {
-        before_grid = *(void**)((uint8_t*)piece + CDF_PIECE_GRID_OFFSET);
-        before_piece_entry =
-            *(void**)((uint8_t*)piece + CDF_PIECE_ENTRY_OFFSET);
-        if (before_grid) {
-            result.probe_flags |= CDF_STORE_PROBE_BEFORE_GRID_PRESENT;
-        }
-        if (before_piece_entry == entry) {
-            result.probe_flags |= CDF_STORE_PROBE_BEFORE_ENTRY_MATCH;
-        }
-        if (cdf_copy_string(
-                (const CdfNarrowString*)((uint8_t*)entry +
-                    CDF_ENTRY_ROOM_OFFSET),
-                result.before_room,
-                sizeof(result.before_room))) {
-            result.probe_flags |= CDF_STORE_PROBE_BEFORE_ROOM_READ;
-            if (result.before_room[0] != '\0') {
-                result.probe_flags |= CDF_STORE_PROBE_BEFORE_ROOM_NONEMPTY;
-            }
-        }
-        ((CdfStorePieceFn)(
-            executable + CDF_FURNITURE_STORE_PIECE_RVA))(piece);
-        result.probe_flags |= CDF_STORE_PROBE_CALL_COMPLETED;
-        result.pending_component = piece;
-        if (cdf_delete_queued(piece)) {
-            result.probe_flags |= CDF_STORE_PROBE_AFTER_DELETE_QUEUED;
-        }
-        if (cdf_copy_string(
-                (const CdfNarrowString*)((uint8_t*)entry +
-                    CDF_ENTRY_ROOM_OFFSET),
-                result.after_room,
-                sizeof(result.after_room))) {
-            result.probe_flags |= CDF_STORE_PROBE_AFTER_ROOM_READ;
-            if (result.after_room[0] == '\0') {
-                result.probe_flags |= CDF_STORE_PROBE_AFTER_ROOM_EMPTY;
-            }
-        }
-        if (cdf_readable(
-                piece, CDF_PIECE_ENTRY_OFFSET + sizeof(void*))) {
-            after_grid =
-                *(void**)((uint8_t*)piece + CDF_PIECE_GRID_OFFSET);
-            after_piece_entry =
-                *(void**)((uint8_t*)piece + CDF_PIECE_ENTRY_OFFSET);
-            if (!after_grid) {
-                result.probe_flags |= CDF_STORE_PROBE_AFTER_GRID_NULL;
-            }
-            if (!after_piece_entry) {
-                result.probe_flags |= CDF_STORE_PROBE_AFTER_ENTRY_NULL;
-            }
-        }
-        if (cdf_find_entry(stable_key, expected_item, NULL) == entry) {
-            result.probe_flags |= CDF_STORE_PROBE_AFTER_STORAGE_ENTRY_SAME;
-        }
-        if (cdf_native_scene_contains_component(scene_manager, piece)) {
-            result.probe_flags |= CDF_STORE_PROBE_AFTER_SCENE_CONTAINS;
-        }
+        g_runtime.storage_delete(storage, stable_key);
         result.success = (uint8_t)(
-            (result.probe_flags & CDF_STORE_PROBE_AFTER_DELETE_QUEUED) != 0U &&
-            (result.probe_flags & CDF_STORE_PROBE_AFTER_ROOM_EMPTY) != 0U &&
-            (result.probe_flags & CDF_STORE_PROBE_AFTER_ENTRY_NULL) != 0U &&
-            (result.probe_flags & CDF_STORE_PROBE_AFTER_STORAGE_ENTRY_SAME) != 0U);
+            cdf_find_entry(stable_key, expected_item, NULL) == NULL);
     }
     __except (cdf_capture_exception(
         GetExceptionInformation(), &result.seh_code, &result.exception_rva)) {
@@ -954,52 +937,19 @@ CdfEnhancedPatchAudit cdf_native_ensure_enhanced_patches(void) {
         0xD1, 0xE8,
         0xFF, 0xC0,
         0x90, 0x90, 0x90, 0x90};
-    uint8_t* executable = (uint8_t*)GetModuleHandleW(NULL);
-    const uintptr_t value_rvas[] = {
-        CDF_FURNITURE_LIST_VALUE_FLAGS_1_RVA,
-        CDF_FURNITURE_LIST_VALUE_FLAGS_2_RVA,
-        CDF_FURNITURE_DETAIL_VALUE_FLAGS_1_RVA,
-        CDF_FURNITURE_DETAIL_VALUE_FLAGS_2_RVA,
-        CDF_FURNITURE_SORT_VALUE_FLAGS_1_RVA,
-        CDF_FURNITURE_SORT_VALUE_FLAGS_2_RVA};
     CdfEnhancedPatchAudit result;
-    const uint32_t count_site_bit =
-        1U << (sizeof(value_rvas) / sizeof(value_rvas[0]));
+    const uint32_t count_site_bit = 1U << CDF_VALUE_PATCH_SITE_COUNT;
     const uint32_t all_sites_mask = (count_site_bit << 1U) - 1U;
     size_t index;
     memset(&result, 0, sizeof(result));
-    if (!executable || !cdf_signatures_valid()) {
+    cdf_resolve_runtime_once();
+    if (g_runtime.value_patch_site_count != CDF_VALUE_PATCH_SITE_COUNT ||
+        !g_runtime.count_patch_site) {
         result.conflict_mask = all_sites_mask;
         return result;
     }
-    for (index = 0; index < sizeof(value_rvas) / sizeof(value_rvas[0]);
-         ++index) {
-        const uint8_t* site = executable + value_rvas[index];
-        const uint32_t site_bit = 1U << index;
-        if (!cdf_readable(site, sizeof(value_expected)) ||
-            (memcmp(site, value_expected, sizeof(value_expected)) != 0 &&
-             memcmp(site, value_replacement, sizeof(value_replacement)) != 0)) {
-            result.conflict_mask |= site_bit;
-        }
-    }
-    {
-        const uint8_t* count_site =
-            executable + CDF_FURNITURE_LIST_EFFECT_COUNT_RVA;
-        if (!cdf_readable(count_site, sizeof(count_expected)) ||
-            (memcmp(count_site, count_expected, sizeof(count_expected)) != 0 &&
-             memcmp(
-                 count_site,
-                 count_replacement,
-                 sizeof(count_replacement)) != 0)) {
-            result.conflict_mask |= count_site_bit;
-        }
-    }
-    if (result.conflict_mask != 0U) {
-        return result;
-    }
-    for (index = 0; index < sizeof(value_rvas) / sizeof(value_rvas[0]);
-         ++index) {
-        uint8_t* site = executable + value_rvas[index];
+    for (index = 0; index < CDF_VALUE_PATCH_SITE_COUNT; ++index) {
+        uint8_t* site = g_runtime.value_patch_sites[index];
         const uint32_t site_bit = 1U << index;
         if (memcmp(site, value_expected, sizeof(value_expected)) == 0) {
             if (!cdf_patch_bytes(
@@ -1014,28 +964,31 @@ CdfEnhancedPatchAudit cdf_native_ensure_enhanced_patches(void) {
         }
         if (memcmp(site, value_replacement, sizeof(value_replacement)) == 0) {
             result.patched_mask |= site_bit;
+        } else {
+            result.conflict_mask |= site_bit;
         }
     }
-    {
-        uint8_t* count_site =
-            executable + CDF_FURNITURE_LIST_EFFECT_COUNT_RVA;
-        if (memcmp(count_site, count_expected, sizeof(count_expected)) == 0) {
-            if (!cdf_patch_bytes(
-                    count_site,
-                    count_expected,
-                    count_replacement,
-                    sizeof(count_expected))) {
-                result.conflict_mask |= count_site_bit;
-            } else {
-                result.repaired_mask |= count_site_bit;
-            }
-        }
-        if (memcmp(
-                count_site,
+    if (memcmp(
+            g_runtime.count_patch_site,
+            count_expected,
+            sizeof(count_expected)) == 0) {
+        if (!cdf_patch_bytes(
+                g_runtime.count_patch_site,
+                count_expected,
                 count_replacement,
-                sizeof(count_replacement)) == 0) {
-            result.patched_mask |= count_site_bit;
+                sizeof(count_expected))) {
+            result.conflict_mask |= count_site_bit;
+        } else {
+            result.repaired_mask |= count_site_bit;
         }
+    }
+    if (memcmp(
+            g_runtime.count_patch_site,
+            count_replacement,
+            sizeof(count_replacement)) == 0) {
+        result.patched_mask |= count_site_bit;
+    } else {
+        result.conflict_mask |= count_site_bit;
     }
     result.success = (uint8_t)(
         result.conflict_mask == 0U &&

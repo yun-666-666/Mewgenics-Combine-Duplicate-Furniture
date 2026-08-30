@@ -23,9 +23,7 @@
 namespace {
 
 constexpr auto kOwner = "CombineDuplicateFurniture";
-constexpr UINT_PTR kSceneReadyUpdateRva = 0x962820;
 constexpr int kSceneReadyStolenBytes = 15;
-constexpr UINT_PTR kFurnitureModeEnterRva = 0x1AB940;
 constexpr int kFurnitureModeEnterStolenBytes = 15;
 
 using InstallHookFn = int (__cdecl*)(
@@ -53,7 +51,9 @@ bool g_combine_requested{};
 std::chrono::steady_clock::time_point g_combine_request_deadline{};
 bool g_ui_rebuild_pending{};
 std::vector<std::uint64_t> g_ui_rebuild_keys;
-void* g_last_scene_manager{};
+void* g_furniture_mode_component{};
+bool g_enhanced_supported{};
+bool g_ui_refresh_supported{};
 
 struct DisplayAuditTarget {
     std::uint64_t stable_key{};
@@ -94,7 +94,6 @@ struct BatchState {
 
     std::vector<cdf::CombineCandidate> candidates;
     std::size_t next_index{};
-    std::vector<void*> pending_components;
     Stage stage{Stage::AwaitingFurnitureExit};
 };
 
@@ -246,12 +245,10 @@ void Notify(
 std::string BatchPreview(
     const std::vector<cdf::CombineCandidate>& candidates) {
     std::map<std::string, std::size_t> pair_counts;
-    std::size_t placed_pairs{};
     std::size_t ordinary_pairs{};
     std::size_t rare_pairs{};
     for (const auto& candidate : candidates) {
         ++pair_counts[candidate.item_id];
-        placed_pairs += candidate.consume_placed ? 1U : 0U;
         candidate.promote_to_rare ? ++ordinary_pairs : ++rare_pairs;
     }
 
@@ -269,10 +266,6 @@ std::string BatchPreview(
         }
         output << "The batch will consume " << candidates.size()
                << " duplicate items.\n";
-        if (placed_pairs != 0U) {
-            output << placed_pairs
-                   << " pairs require recalling the material item from a room first.\n";
-        }
     } else {
         output << "发现 " << candidates.size() << " 组可合并的重复家具。\n\n";
         if (ordinary_pairs != 0U) {
@@ -284,10 +277,6 @@ std::string BatchPreview(
                    << " 组 Rare 同款：每组保留 1 件强化 Rare（基础数值 4 倍），清掉 1 件重复件。\n";
         }
         output << "合计将消耗 " << candidates.size() << " 件重复家具。\n";
-        if (placed_pairs != 0U) {
-            output << "其中 " << placed_pairs
-                   << " 组需要先把材料家具从房间收回家具栏。\n";
-        }
     }
     output << '\n';
 
@@ -402,6 +391,17 @@ void ClearBatch() {
     g_busy = false;
 }
 
+std::vector<cdf::CombineCandidate> SupportedCandidates(
+    const cdf::ScanSnapshot& snapshot) {
+    auto candidates = cdf::FindCandidates(snapshot, g_catalog);
+    if (!g_enhanced_supported) {
+        std::erase_if(candidates, [](const auto& candidate) {
+            return candidate.promote_to_enhanced;
+        });
+    }
+    return candidates;
+}
+
 std::string_view UiRebuildStatusName(
     cdf::FurnitureUiRebuildStatus status) {
     switch (status) {
@@ -411,8 +411,8 @@ std::string_view UiRebuildStatusName(
             return "armed";
         case cdf::FurnitureUiRebuildStatus::EnterContextUnavailable:
             return "enter_context_unavailable";
-        case cdf::FurnitureUiRebuildStatus::SignatureMismatch:
-            return "signature_mismatch";
+        case cdf::FurnitureUiRebuildStatus::LayoutUnavailable:
+            return "layout_unavailable";
         case cdf::FurnitureUiRebuildStatus::ComponentUnavailable:
             return "component_unavailable";
         case cdf::FurnitureUiRebuildStatus::ComponentUnreadable:
@@ -440,11 +440,11 @@ std::string FormatPatchAudit(const cdf::EnhancedPatchAudit& audit) {
     return output.str();
 }
 
-void LogDisplayAudit(void* scene_manager, std::string_view phase) {
-    if (!scene_manager || g_display_audit_targets.empty()) {
+void LogDisplayAudit(std::string_view phase) {
+    if (g_display_audit_targets.empty()) {
         return;
     }
-    cdf::NativeTransactionPort port(scene_manager);
+    cdf::NativeTransactionPort port;
     const auto snapshot = port.Scan();
     for (const auto& target : g_display_audit_targets) {
         const auto found = std::ranges::find_if(
@@ -505,7 +505,7 @@ void StopBatch(
     ClearBatch();
 }
 
-void FinishBatch(void* scene_manager) {
+void FinishBatch() {
     const auto completed = g_batch.next_index;
     std::size_t ordinary_pairs{};
     std::size_t rare_pairs{};
@@ -528,10 +528,11 @@ void FinishBatch(void* scene_manager) {
         }
     }
     g_display_audit_enter_logged = false;
-    LogDisplayAudit(scene_manager, "batch_complete");
-    g_ui_rebuild_pending = true;
+    LogDisplayAudit("batch_complete");
+    g_ui_rebuild_pending = g_ui_refresh_supported;
     Log("batch complete pairs=" + std::to_string(completed) +
-        " ui_refresh_pending_on_mode_enter=1");
+        " ui_refresh_pending_on_mode_enter=" +
+        std::to_string(g_ui_rebuild_pending));
     if (EnglishUi()) {
         Notify(
             "Batch combine complete: " + std::to_string(completed) +
@@ -553,27 +554,13 @@ void FinishBatch(void* scene_manager) {
     ClearBatch();
 }
 
-void ProcessBatch(void* scene_manager) {
+void ProcessBatch() {
     if (!g_busy) {
         return;
     }
 
-    if (!g_batch.pending_components.empty()) {
-        std::erase_if(
-            g_batch.pending_components,
-            [scene_manager](const void* component) {
-                return !cdf::SceneContainsComponent(
-                    scene_manager, component);
-            });
-        if (!g_batch.pending_components.empty()) {
-            return;
-        }
-        Log("room furniture pre-store complete");
-        return;
-    }
-
     const bool furniture_mode_active =
-        cdf::FurnitureModeActive(scene_manager);
+        cdf::FurnitureModeActive(g_furniture_mode_component);
     if (g_batch.stage == BatchState::Stage::AwaitingFurnitureExit) {
         if (furniture_mode_active) {
             return;
@@ -588,10 +575,10 @@ void ProcessBatch(void* scene_manager) {
             return;
         }
 
-        cdf::NativeTransactionPort port(scene_manager);
+        cdf::NativeTransactionPort port;
         const auto snapshot = port.Scan();
-        const auto refreshed = cdf::FindCandidates(snapshot, g_catalog);
-        const bool matches = snapshot.complete && port.SignaturesValid() &&
+        const auto refreshed = SupportedCandidates(snapshot);
+        const bool matches = snapshot.complete && port.RuntimeAvailable() &&
             cdf::RemainingCandidatesMatch(
                 g_batch.candidates, g_batch.next_index, refreshed);
         Log("batch exit validation completed=" +
@@ -622,12 +609,12 @@ void ProcessBatch(void* scene_manager) {
     }
 
     if (g_batch.next_index >= g_batch.candidates.size()) {
-        FinishBatch(scene_manager);
+        FinishBatch();
         return;
     }
 
     const auto candidate = g_batch.candidates[g_batch.next_index];
-    cdf::NativeTransactionPort port(scene_manager);
+    cdf::NativeTransactionPort port;
     if (candidate.promote_to_rare && !port.SetRare(
             candidate.keep_key,
             candidate.item_id,
@@ -676,16 +663,16 @@ void ProcessBatch(void* scene_manager) {
                 << " kind="
                 << (candidate.promote_to_rare ? "ordinary_to_rare" :
                                                 "rare_to_enhanced")
-                << " stored_from_room=" << candidate.consume_placed;
+                << " source=inventory";
         Log(message.str());
     }
 
     if (g_batch.next_index == g_batch.candidates.size()) {
-        FinishBatch(scene_manager);
+        FinishBatch();
     }
 }
 
-void HandleCombine(void* scene_manager) {
+void HandleCombine() {
     if (g_busy.exchange(true)) {
         return;
     }
@@ -702,13 +689,13 @@ void HandleCombine(void* scene_manager) {
         return;
     }
 
-    cdf::NativeTransactionPort port(scene_manager);
+    cdf::NativeTransactionPort port;
     const auto snapshot = port.Scan();
     std::size_t rare_count{};
     for (const auto& item : snapshot.furniture) {
         rare_count += item.IsRare() ? 1U : 0U;
     }
-    auto candidates = cdf::FindCandidates(snapshot, g_catalog);
+    auto candidates = SupportedCandidates(snapshot);
     std::size_t ordinary_candidates{};
     std::size_t rare_candidates{};
     for (const auto& candidate : candidates) {
@@ -725,7 +712,7 @@ void HandleCombine(void* scene_manager) {
                 << " complete=" << snapshot.complete;
         Log(message.str());
     }
-    if (!snapshot.complete || !port.SignaturesValid()) {
+    if (!snapshot.complete || !port.RuntimeAvailable()) {
         Notify(
             Localized(
                 "当前家具状态无法读取，未修改任何家具。",
@@ -766,13 +753,13 @@ void HandleCombine(void* scene_manager) {
 
     const auto preview_pairs = candidates.size();
     const auto refreshed_snapshot = port.Scan();
-    candidates = cdf::FindCandidates(refreshed_snapshot, g_catalog);
+    candidates = SupportedCandidates(refreshed_snapshot);
     Log("batch refreshed preview_pairs=" +
         std::to_string(preview_pairs) + " refreshed_pairs=" +
         std::to_string(candidates.size()) + " total=" +
         std::to_string(refreshed_snapshot.furniture.size()) +
         " complete=" + std::to_string(refreshed_snapshot.complete));
-    if (!refreshed_snapshot.complete || !port.SignaturesValid()) {
+    if (!refreshed_snapshot.complete || !port.RuntimeAvailable()) {
         Notify(
             Localized(
                 "确认后家具状态无法重新读取，未修改任何家具。",
@@ -800,39 +787,19 @@ void HandleCombine(void* scene_manager) {
         std::to_string(g_batch.candidates.size()) +
         "; waiting for furniture mode exit");
 
-    std::size_t room_materials{};
-    for (const auto& candidate : g_batch.candidates) {
-        if (!candidate.consume_placed) {
-            continue;
-        }
-        const bool stored = port.Store(
-            candidate.consume_key, candidate.item_id);
-        Log("room furniture pre-store probe item=" + candidate.item_id +
-            " consume_key=" + std::to_string(candidate.consume_key) +
-            " success=" + std::to_string(stored) + " " +
-            port.LastStoreProbeSummary());
-        if (!stored) {
-            StopBatch("pre_store", candidate, port.LastFailure());
-            return;
-        }
-        g_batch.pending_components.push_back(
-            port.LastStoredComponent());
-        ++room_materials;
-    }
-    if (room_materials != 0U) {
-        Log("room furniture pre-store queued count=" +
-            std::to_string(room_materials));
-    }
 }
 
 void* __fastcall FurnitureModeEnterHook(void* mode_enter_context) {
+    g_furniture_mode_component =
+        cdf::FurnitureModeComponent(mode_enter_context);
     const auto patch_audit = cdf::EnsureEnhancedFurniturePatches();
+    g_enhanced_supported = patch_audit.success;
     if (!g_display_audit_enter_logged) {
-        LogDisplayAudit(g_last_scene_manager, "before_mode_rebuild");
+        LogDisplayAudit("before_mode_rebuild");
         g_display_audit_enter_logged = true;
     }
     cdf::FurnitureUiRebuildResult rebuild;
-    if (g_enabled && g_ui_rebuild_pending && patch_audit.success) {
+    if (g_enabled && g_ui_rebuild_pending && g_ui_refresh_supported) {
         rebuild = cdf::PrepareFurnitureUiRebuildOnEnter(
             mode_enter_context, g_ui_rebuild_keys);
     }
@@ -871,7 +838,6 @@ void __fastcall SceneReadyHook(void* scene_manager) {
     if (!g_enabled || !scene_manager) {
         return;
     }
-    g_last_scene_manager = scene_manager;
     EnsureConfig();
     const auto now = std::chrono::steady_clock::now();
     const bool hotkey_down =
@@ -887,20 +853,20 @@ void __fastcall SceneReadyHook(void* scene_manager) {
     }
     g_hotkey_down = hotkey_down;
     if (g_busy) {
-        ProcessBatch(scene_manager);
+        ProcessBatch();
         return;
     }
     if (!g_combine_requested) {
         return;
     }
     const bool furniture_mode_active =
-        cdf::FurnitureModeActive(scene_manager);
+        cdf::FurnitureModeActive(g_furniture_mode_component);
     if (!furniture_mode_active) {
         return;
     }
     if (g_combine_requested) {
         g_combine_requested = false;
-        HandleCombine(scene_manager);
+        HandleCombine();
     }
 }
 
@@ -918,29 +884,39 @@ bool ResolveAndHook() {
     if (!get_version || get_version() < 3 || !install_hook) {
         return false;
     }
-    if (!cdf::FurnitureModeEnterRefreshSupported()) {
+    const auto runtime = cdf::ResolveRuntime();
+    if (runtime.scene_ready_hook_rva == 0U ||
+        runtime.furniture_mode_enter_hook_rva == 0U) {
         if (g_mew_log) {
             g_mew_log(
                 kOwner,
-                "Furniture mode-enter refresh signatures do not match");
+                "Required runtime hooks could not be located in this game build");
         }
         return false;
     }
+    g_ui_refresh_supported = runtime.ui_refresh_available;
     const auto patch_audit = cdf::EnsureEnhancedFurniturePatches();
+    g_enhanced_supported = patch_audit.success;
     if (!patch_audit.success) {
         if (g_mew_log) {
             g_mew_log(
                 kOwner,
-                "Enhanced furniture patch signatures do not match; patched=0x%X repaired=0x%X conflict=0x%X",
+                "Enhanced Rare support unavailable; ordinary merging remains enabled; patched=0x%X repaired=0x%X conflict=0x%X",
                 patch_audit.patched_mask,
                 patch_audit.repaired_mask,
                 patch_audit.conflict_mask);
         }
-        return false;
+    }
+    if (g_mew_log && (!runtime.core_available || !runtime.ui_refresh_available)) {
+        g_mew_log(
+            kOwner,
+            "Runtime capabilities core=%d ui_refresh=%d; unavailable capabilities are disabled instead of rejecting the game build",
+            runtime.core_available,
+            runtime.ui_refresh_available);
     }
     void* mode_enter_trampoline{};
     if (!install_hook(
-            kFurnitureModeEnterRva,
+            runtime.furniture_mode_enter_hook_rva,
             kFurnitureModeEnterStolenBytes,
             reinterpret_cast<void*>(&FurnitureModeEnterHook),
             &mode_enter_trampoline,
@@ -953,7 +929,7 @@ bool ResolveAndHook() {
 
     void* scene_ready_trampoline{};
     if (!install_hook(
-            kSceneReadyUpdateRva,
+            runtime.scene_ready_hook_rva,
             kSceneReadyStolenBytes,
             reinterpret_cast<void*>(&SceneReadyHook),
             &scene_ready_trampoline,

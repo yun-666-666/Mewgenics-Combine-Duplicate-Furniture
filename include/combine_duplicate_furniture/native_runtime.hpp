@@ -25,7 +25,7 @@ enum class FurnitureUiRebuildStatus : int {
     NotAttempted = 0,
     Armed = 1,
     EnterContextUnavailable = -1,
-    SignatureMismatch = -2,
+    LayoutUnavailable = -2,
     ComponentUnavailable = -3,
     ComponentUnreadable = -4,
     ModeActive = -5,
@@ -43,8 +43,6 @@ struct FurnitureUiRebuildResult {
 
 class NativeTransactionPort final : public TransactionPort {
 public:
-    explicit NativeTransactionPort(void* scene_manager) noexcept;
-
     [[nodiscard]] ScanSnapshot Scan() override;
     [[nodiscard]] bool SetRare(
         std::uint64_t stable_key,
@@ -64,31 +62,28 @@ public:
         std::uint64_t stable_key,
         const std::string& item_id,
         std::uint64_t expected_flags) override;
-    [[nodiscard]] bool Store(
-        std::uint64_t stable_key,
-        const std::string& item_id);
 
-    [[nodiscard]] bool SignaturesValid() const noexcept;
+    [[nodiscard]] bool RuntimeAvailable() const noexcept;
     [[nodiscard]] NativeFailure LastFailure() const noexcept;
-    [[nodiscard]] void* LastStoredComponent() const noexcept;
-    [[nodiscard]] const std::string& LastStoreProbeSummary() const noexcept;
 
 private:
-    void* scene_manager_{};
-    bool signatures_valid_{};
+    bool runtime_available_{};
     NativeFailure last_failure_{};
-    void* last_stored_component_{};
-    std::string last_store_probe_summary_;
 };
 
-[[nodiscard]] bool FurnitureModeActive(void* scene_manager) noexcept;
-[[nodiscard]] bool FurnitureModeEnterRefreshSupported() noexcept;
+struct RuntimeResolution {
+    std::uintptr_t scene_ready_hook_rva{};
+    std::uintptr_t furniture_mode_enter_hook_rva{};
+    bool core_available{};
+    bool ui_refresh_available{};
+};
+
+[[nodiscard]] RuntimeResolution ResolveRuntime() noexcept;
+[[nodiscard]] void* FurnitureModeComponent(void* mode_enter_context) noexcept;
+[[nodiscard]] bool FurnitureModeActive(void* component) noexcept;
 [[nodiscard]] FurnitureUiRebuildResult PrepareFurnitureUiRebuildOnEnter(
     void* mode_enter_context,
     std::span<const std::uint64_t> stale_row_keys) noexcept;
-[[nodiscard]] bool SceneContainsComponent(
-    void* scene_manager,
-    const void* component) noexcept;
 [[nodiscard]] EnhancedPatchAudit EnsureEnhancedFurniturePatches() noexcept;
 
 }  // namespace cdf
