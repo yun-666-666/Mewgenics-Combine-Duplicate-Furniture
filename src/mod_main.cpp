@@ -23,10 +23,6 @@
 namespace {
 
 constexpr auto kOwner = "CombineDuplicateFurniture";
-constexpr UINT_PTR kSceneReadyUpdateRva = 0x962820;
-constexpr int kSceneReadyStolenBytes = 15;
-constexpr UINT_PTR kFurnitureModeEnterRva = 0x1AB940;
-constexpr int kFurnitureModeEnterStolenBytes = 15;
 
 using InstallHookFn = int (__cdecl*)(
     UINT_PTR, int, void*, void**, int, const char*);
@@ -918,6 +914,15 @@ bool ResolveAndHook() {
     if (!get_version || get_version() < 3 || !install_hook) {
         return false;
     }
+    cdf::NativeLayoutInfo layout;
+    if (!cdf::ResolveNativeLayout(layout)) {
+        if (g_mew_log) {
+            g_mew_log(
+                kOwner,
+                "No supported game layout matched; native hooks were not installed");
+        }
+        return false;
+    }
     if (!cdf::FurnitureModeEnterRefreshSupported()) {
         if (g_mew_log) {
             g_mew_log(
@@ -940,8 +945,8 @@ bool ResolveAndHook() {
     }
     void* mode_enter_trampoline{};
     if (!install_hook(
-            kFurnitureModeEnterRva,
-            kFurnitureModeEnterStolenBytes,
+            layout.furniture_mode_enter_rva,
+            layout.furniture_mode_enter_stolen_bytes,
             reinterpret_cast<void*>(&FurnitureModeEnterHook),
             &mode_enter_trampoline,
             40,
@@ -953,8 +958,8 @@ bool ResolveAndHook() {
 
     void* scene_ready_trampoline{};
     if (!install_hook(
-            kSceneReadyUpdateRva,
-            kSceneReadyStolenBytes,
+            layout.scene_ready_update_rva,
+            layout.scene_ready_stolen_bytes,
             reinterpret_cast<void*>(&SceneReadyHook),
             &scene_ready_trampoline,
             40,
@@ -966,7 +971,11 @@ bool ResolveAndHook() {
 
     g_enabled = true;
     if (g_mew_log) {
-        g_mew_log(kOwner, "Loaded v%s; furniture-mode hotkey is F8", CDF_VERSION);
+        g_mew_log(
+            kOwner,
+            "Loaded v%s for game %s; furniture-mode hotkey is F8",
+            CDF_VERSION,
+            layout.build_name.c_str());
     }
     return true;
 }

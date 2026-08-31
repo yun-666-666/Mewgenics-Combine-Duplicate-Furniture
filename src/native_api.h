@@ -71,6 +71,14 @@ typedef struct CdfEnhancedPatchAudit {
     uint32_t conflict_mask;
 } CdfEnhancedPatchAudit;
 
+typedef struct CdfNativeLayoutInfo {
+    const char* build_name;
+    uintptr_t scene_ready_update_rva;
+    uintptr_t furniture_mode_enter_rva;
+    int32_t scene_ready_stolen_bytes;
+    int32_t furniture_mode_enter_stolen_bytes;
+} CdfNativeLayoutInfo;
+
 typedef enum CdfFurnitureUiRebuildStatus {
     CDF_FURNITURE_UI_REBUILD_NOT_ATTEMPTED = 0,
     CDF_FURNITURE_UI_REBUILD_ARMED = 1,
@@ -90,6 +98,8 @@ typedef struct CdfFurnitureUiRebuildResult {
     size_t rows_scanned;
     size_t rows_invalidated;
 } CdfFurnitureUiRebuildResult;
+
+int cdf_native_resolve_layout(CdfNativeLayoutInfo* output);
 
 int cdf_native_furniture_mode_active(void* scene_manager);
 int cdf_native_furniture_mode_enter_refresh_supported(void);

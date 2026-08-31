@@ -6,25 +6,7 @@
 #include <string.h>
 
 enum {
-    CDF_SCENE_READY_UPDATE_RVA = 0x962820,
-    CDF_FURNITURE_STORAGE_DELETE_RVA = 0x2052E0,
-    CDF_FURNITURE_STORE_PIECE_RVA = 0x2EF0D0,
-    CDF_FURNITURE_STORAGE_GLOBAL_RVA = 0x13D16E0,
-    CDF_FURNITURE_LIST_EFFECT_COUNT_RVA = 0x2EA2D7,
-    CDF_FURNITURE_LIST_VALUE_FLAGS_1_RVA = 0x1A0012,
-    CDF_FURNITURE_LIST_VALUE_FLAGS_2_RVA = 0x1A0097,
-    CDF_FURNITURE_DETAIL_VALUE_FLAGS_1_RVA = 0x1A11F6,
-    CDF_FURNITURE_DETAIL_VALUE_FLAGS_2_RVA = 0x1A1276,
-    CDF_FURNITURE_SORT_VALUE_FLAGS_1_RVA = 0x1A58AD,
-    CDF_FURNITURE_SORT_VALUE_FLAGS_2_RVA = 0x1A5922,
-    CDF_FURNITURE_REBUILD_RVA = 0x1A5470,
-    CDF_FURNITURE_ROW_CACHE_RVA = 0x1A5D6C,
-    CDF_FURNITURE_ROW_KEY_ASSIGN_RVA = 0x1A0FC9,
-    CDF_FURNITURE_STALE_ROW_CLEANUP_RVA = 0x1A614A,
-    CDF_FURNITURE_MODE_ENTER_FUNCTION_RVA = 0x1AB940,
-    CDF_FURNITURE_MODE_ENTER_REBUILD_RVA = 0x1AB95E,
-    CDF_FURNITURE_PIECE_VTABLE_RVA = 0xEDE690,
-    CDF_FURNITURE_BUILDING_UI_VTABLE_RVA = 0xF082A8,
+    CDF_ENHANCED_VALUE_PATCH_COUNT = 6,
     CDF_SCENE_COMPONENT_LIST_OFFSET = 0x18,
     CDF_FURNITURE_REBUILD_DIRTY_OFFSET = 0x58,
     CDF_FURNITURE_MODE_ACTIVE_OFFSET = 0x78,
@@ -45,6 +27,60 @@ enum {
     CDF_STORAGE_COUNT_OFFSET = 0x3C,
     CDF_STORAGE_DATA_OFFSET = 0x40
 };
+
+typedef struct CdfGameLayout {
+    const char* build_name;
+    uintptr_t scene_ready_update_rva;
+    uintptr_t furniture_storage_delete_rva;
+    uintptr_t furniture_store_piece_rva;
+    uintptr_t furniture_storage_global_rva;
+    uintptr_t furniture_list_effect_count_rva;
+    uintptr_t furniture_value_flags_rvas[CDF_ENHANCED_VALUE_PATCH_COUNT];
+    uintptr_t furniture_rebuild_rva;
+    uintptr_t furniture_row_cache_rva;
+    uintptr_t furniture_row_key_assign_rva;
+    uintptr_t furniture_stale_row_cleanup_rva;
+    uintptr_t furniture_mode_enter_function_rva;
+    uintptr_t furniture_mode_enter_rebuild_rva;
+    uintptr_t furniture_piece_vtable_rva;
+    uintptr_t furniture_building_ui_vtable_rva;
+} CdfGameLayout;
+
+static const CdfGameLayout g_public_layout = {
+    "1.1.b21039",
+    0x962820,
+    0x2052E0,
+    0x2EF0D0,
+    0x13D16E0,
+    0x2EA2D7,
+    {0x1A0012, 0x1A0097, 0x1A11F6, 0x1A1276, 0x1A58AD, 0x1A5922},
+    0x1A5470,
+    0x1A5D6C,
+    0x1A0FC9,
+    0x1A614A,
+    0x1AB940,
+    0x1AB95E,
+    0xEDE690,
+    0xF082A8};
+
+static const CdfGameLayout g_beta_layout = {
+    "1.1.b21220-beta",
+    0x96ABD0,
+    0x205D50,
+    0x2EFBF0,
+    0x13D99E0,
+    0x2EADF7,
+    {0x1A0A32, 0x1A0AB7, 0x1A1C16, 0x1A1C96, 0x1A62CD, 0x1A6342},
+    0x1A5E90,
+    0x1A678C,
+    0x1A19E9,
+    0x1A6B6A,
+    0x1AC360,
+    0x1AC37E,
+    0xEE5858,
+    0xF0F3C0};
+
+static const CdfGameLayout* g_layout;
 
 typedef struct CdfNarrowString {
     union {
@@ -189,28 +225,177 @@ static int cdf_signature(
         memcmp(address, expected, size) == 0;
 }
 
-static int cdf_signatures_valid(void) {
+static uintptr_t cdf_relative_target(const uint8_t* instruction) {
+    int32_t displacement;
+    if (!cdf_readable(instruction, 5U) || instruction[0] != 0xE8) {
+        return 0U;
+    }
+    memcpy(&displacement, instruction + 1U, sizeof(displacement));
+    return (uintptr_t)(instruction + 5U) + displacement;
+}
+
+static uintptr_t cdf_rip_target(const uint8_t* instruction) {
+    int32_t displacement;
+    if (!cdf_readable(instruction, 7U) || instruction[0] != 0x48 ||
+        instruction[1] != 0x8B ||
+        (instruction[2] & 0xC7U) != 0x05U) {
+        return 0U;
+    }
+    memcpy(&displacement, instruction + 3U, sizeof(displacement));
+    return (uintptr_t)(instruction + 7U) + displacement;
+}
+
+static int cdf_executable_address(const void* pointer) {
+    MEMORY_BASIC_INFORMATION memory;
+    DWORD protection;
+    if (!pointer || !VirtualQuery(pointer, &memory, sizeof(memory)) ||
+        memory.State != MEM_COMMIT ||
+        (memory.Protect & (PAGE_NOACCESS | PAGE_GUARD)) != 0U) {
+        return 0;
+    }
+    protection = memory.Protect & 0xFFU;
+    return protection == PAGE_EXECUTE ||
+        protection == PAGE_EXECUTE_READ ||
+        protection == PAGE_EXECUTE_READWRITE ||
+        protection == PAGE_EXECUTE_WRITECOPY;
+}
+
+static int cdf_vtable_rtti_valid(
+    const uint8_t* executable,
+    uint32_t image_size,
+    uintptr_t vtable_rva,
+    const char* expected_name) {
+    typedef struct CdfCompleteObjectLocator {
+        uint32_t signature;
+        uint32_t offset;
+        uint32_t constructor_displacement;
+        uint32_t type_descriptor_rva;
+        uint32_t class_descriptor_rva;
+        uint32_t self_rva;
+    } CdfCompleteObjectLocator;
+    const void* const* vtable;
+    const CdfCompleteObjectLocator* locator;
+    const char* name;
+    uintptr_t locator_rva;
+    size_t index;
+    if (!executable || !expected_name || vtable_rva < sizeof(void*) ||
+        vtable_rva >= image_size) {
+        return 0;
+    }
+    vtable = (const void* const*)(executable + vtable_rva);
+    if (!cdf_readable(vtable - 1, sizeof(void*) * 5U)) {
+        return 0;
+    }
+    locator = (const CdfCompleteObjectLocator*)vtable[-1];
+    if (!locator || (const uint8_t*)locator < executable ||
+        (uintptr_t)((const uint8_t*)locator - executable) >= image_size ||
+        !cdf_readable(locator, sizeof(*locator))) {
+        return 0;
+    }
+    locator_rva = (uintptr_t)((const uint8_t*)locator - executable);
+    if (locator->signature != 1U || locator->self_rva != locator_rva ||
+        locator->type_descriptor_rva >= image_size) {
+        return 0;
+    }
+    name = (const char*)(executable + locator->type_descriptor_rva + 16U);
+    if (!cdf_readable(name, strlen(expected_name) + 1U) ||
+        strcmp(name, expected_name) != 0) {
+        return 0;
+    }
+    for (index = 0U; index < 4U; ++index) {
+        if (!cdf_executable_address(vtable[index])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int cdf_scene_ready_signature_valid(
+    const uint8_t* executable,
+    const CdfGameLayout* layout) {
+    static const uint8_t prologue[] = {
+        0x48, 0x89, 0x5C, 0x24, 0x10,
+        0x48, 0x89, 0x6C, 0x24, 0x18,
+        0x57, 0x48, 0x83, 0xEC, 0x20,
+        0x48, 0x8B, 0xF9,
+        0x48, 0x89, 0x0D};
+    static const uint8_t body[] = {
+        0x48, 0x81, 0xC1, 0xE0, 0x04, 0x00, 0x00,
+        0x48, 0x89, 0x74, 0x24, 0x30,
+        0xC7, 0x05};
+    const uint8_t* function = executable + layout->scene_ready_update_rva;
+    return cdf_signature(function, prologue, sizeof(prologue)) &&
+        cdf_signature(function + 25U, body, sizeof(body));
+}
+
+static int cdf_storage_signatures_valid(
+    const uint8_t* executable,
+    const CdfGameLayout* layout) {
     static const uint8_t delete_signature[] = {
         0x40, 0x57, 0x48, 0x83, 0xEC, 0x20,
         0x44, 0x8B, 0x51, 0x3C,
         0x45, 0x33, 0xC0};
-    static const uint8_t store_signature[] = {
-        0x40, 0x53, 0x48, 0x83, 0xEC, 0x20,
-        0x48, 0x8B, 0xD9,
-        0xE8, 0xF2, 0xF2, 0xFF, 0xFF};
-    const uint8_t* executable = (const uint8_t*)GetModuleHandleW(NULL);
-    return executable &&
+    static const uint8_t store_prologue[] = {
+        0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9};
+    static const uint8_t store_entry[] = {
+        0x48, 0x8B, 0x93, 0xE0, 0x02, 0x00, 0x00};
+    const uint8_t* store = executable + layout->furniture_store_piece_rva;
+    return
         cdf_signature(
-            executable + CDF_FURNITURE_STORAGE_DELETE_RVA,
+            executable + layout->furniture_storage_delete_rva,
             delete_signature,
             sizeof(delete_signature)) &&
-        cdf_signature(
-            executable + CDF_FURNITURE_STORE_PIECE_RVA,
-            store_signature,
-            sizeof(store_signature));
+        cdf_signature(store, store_prologue, sizeof(store_prologue)) &&
+        cdf_signature(store + 14U, store_entry, sizeof(store_entry)) &&
+        cdf_rip_target(store + 21U) ==
+            (uintptr_t)(executable + layout->furniture_storage_global_rva) &&
+        cdf_relative_target(store + 28U) ==
+            (uintptr_t)(executable + layout->furniture_storage_delete_rva);
 }
 
-static int cdf_furniture_rebuild_runtime_signatures_valid(void) {
+static int cdf_enhanced_patch_signatures_valid(
+    const uint8_t* executable,
+    const CdfGameLayout* layout) {
+    static const uint8_t value_expected[] = {0x80, 0xE3, 0x01};
+    static const uint8_t value_replacement[] = {0x80, 0xE3, 0x03};
+    static const uint8_t count_prefix[] = {
+        0x49, 0x8B, 0x96, 0xD8, 0x02, 0x00, 0x00};
+    static const uint8_t count_expected[] = {
+        0xF6, 0x42, 0x28, 0x02,
+        0xB8, 0x00, 0x00, 0x00, 0x00,
+        0x0F, 0x95, 0xC0,
+        0xFF, 0xC0};
+    static const uint8_t count_replacement[] = {
+        0x8B, 0x42, 0x28,
+        0x83, 0xE0, 0x06,
+        0xD1, 0xE8,
+        0xFF, 0xC0,
+        0x90, 0x90, 0x90, 0x90};
+    size_t index;
+    for (index = 0U; index < CDF_ENHANCED_VALUE_PATCH_COUNT; ++index) {
+        const uint8_t* site =
+            executable + layout->furniture_value_flags_rvas[index];
+        if (!cdf_readable(site - 3U, sizeof(value_expected) + 3U) ||
+            site[-3] != 0x28 || site[-2] != 0xD0 || site[-1] != 0xEB ||
+            (memcmp(site, value_expected, sizeof(value_expected)) != 0 &&
+             memcmp(site, value_replacement, sizeof(value_replacement)) != 0)) {
+            return 0;
+        }
+    }
+    {
+        const uint8_t* site =
+            executable + layout->furniture_list_effect_count_rva;
+        return cdf_signature(site - sizeof(count_prefix),
+                count_prefix, sizeof(count_prefix)) &&
+            (cdf_signature(site, count_expected, sizeof(count_expected)) ||
+             cdf_signature(
+                site, count_replacement, sizeof(count_replacement)));
+    }
+}
+
+static int cdf_furniture_rebuild_runtime_signatures_valid_for(
+    const uint8_t* executable,
+    const CdfGameLayout* layout) {
     static const uint8_t rebuild_signature[] = {
         0x40, 0x57, 0x48, 0x83, 0xEC, 0x40,
         0x80, 0x79, 0x58, 0x00};
@@ -218,13 +403,14 @@ static int cdf_furniture_rebuild_runtime_signatures_valid(void) {
         0xC6, 0x40, 0x78, 0x01,
         0x48, 0x8B, 0x79, 0x08,
         0x48, 0x8B, 0xCF,
-        0xE8, 0x02, 0x9B, 0xFF, 0xFF};
-    static const uint8_t row_cache_signature[] = {
+        0xE8};
+    static const uint8_t row_cache_prefix[] = {
         0x49, 0x8B, 0x46, 0x18,
         0x48, 0x8B, 0x58, 0x08,
         0xBA, 0xEF, 0x03, 0x00, 0x00,
         0x48, 0x8B, 0xCB,
-        0xE8, 0xBF, 0xD2, 0x7B, 0x00,
+        0xE8};
+    static const uint8_t row_cache_suffix[] = {
         0x48, 0x8B, 0x43, 0x20,
         0x48, 0x8B, 0x88, 0xF0, 0x3E, 0x00, 0x00};
     static const uint8_t row_key_signature[] = {
@@ -234,44 +420,120 @@ static int cdf_furniture_rebuild_runtime_signatures_valid(void) {
         0x48, 0x8B, 0x1F,
         0x48, 0x3B, 0xDF,
         0x74, 0x16};
-    const uint8_t* executable =
-        (const uint8_t*)GetModuleHandleW(NULL);
-    return executable &&
+    const uint8_t* rebuild = executable + layout->furniture_rebuild_rva;
+    const uint8_t* mode_enter =
+        executable + layout->furniture_mode_enter_rebuild_rva;
+    const uint8_t* row_cache =
+        executable + layout->furniture_row_cache_rva;
+    return
         cdf_signature(
-            executable + CDF_FURNITURE_REBUILD_RVA,
+            rebuild,
             rebuild_signature,
             sizeof(rebuild_signature)) &&
+        cdf_rip_target(rebuild + 30U) ==
+            (uintptr_t)(executable + layout->furniture_storage_global_rva) &&
         cdf_signature(
-            executable + CDF_FURNITURE_MODE_ENTER_REBUILD_RVA,
+            mode_enter,
             mode_enter_signature,
             sizeof(mode_enter_signature)) &&
+        cdf_relative_target(mode_enter + 11U) ==
+            (uintptr_t)(executable + layout->furniture_rebuild_rva) &&
         cdf_signature(
-            executable + CDF_FURNITURE_ROW_CACHE_RVA,
-            row_cache_signature,
-            sizeof(row_cache_signature)) &&
+            row_cache,
+            row_cache_prefix,
+            sizeof(row_cache_prefix)) &&
         cdf_signature(
-            executable + CDF_FURNITURE_ROW_KEY_ASSIGN_RVA,
+            row_cache + 21U,
+            row_cache_suffix,
+            sizeof(row_cache_suffix)) &&
+        cdf_signature(
+            executable + layout->furniture_row_key_assign_rva,
             row_key_signature,
             sizeof(row_key_signature)) &&
         cdf_signature(
-            executable + CDF_FURNITURE_STALE_ROW_CLEANUP_RVA,
+            executable + layout->furniture_stale_row_cleanup_rva,
             stale_row_cleanup_signature,
             sizeof(stale_row_cleanup_signature));
 }
 
-static int cdf_furniture_mode_enter_hook_signature_valid(void) {
+static int cdf_furniture_mode_enter_function_signature_valid_for(
+    const uint8_t* executable,
+    const CdfGameLayout* layout) {
     static const uint8_t mode_enter_function_signature[] = {
         0x48, 0x89, 0x5C, 0x24, 0x10,
         0x48, 0x89, 0x6C, 0x24, 0x18,
         0x48, 0x89, 0x74, 0x24, 0x20};
-    const uint8_t* executable =
-        (const uint8_t*)GetModuleHandleW(NULL);
-    return executable &&
-        cdf_signature(
-            executable + CDF_FURNITURE_MODE_ENTER_FUNCTION_RVA,
-            mode_enter_function_signature,
-            sizeof(mode_enter_function_signature)) &&
-        cdf_furniture_rebuild_runtime_signatures_valid();
+    return cdf_signature(
+        executable + layout->furniture_mode_enter_function_rva,
+        mode_enter_function_signature,
+        sizeof(mode_enter_function_signature));
+}
+
+static int cdf_runtime_signatures_valid_for(
+    const uint8_t* executable,
+    uint32_t image_size,
+    const CdfGameLayout* layout) {
+    return cdf_storage_signatures_valid(executable, layout) &&
+        cdf_furniture_rebuild_runtime_signatures_valid_for(
+            executable, layout) &&
+        cdf_enhanced_patch_signatures_valid(executable, layout) &&
+        cdf_vtable_rtti_valid(
+            executable,
+            image_size,
+            layout->furniture_piece_vtable_rva,
+            ".?AVFurniturePiece@glaiel@@") &&
+        cdf_vtable_rtti_valid(
+            executable,
+            image_size,
+            layout->furniture_building_ui_vtable_rva,
+            ".?AVFurnitureBuildingUI@glaiel@@");
+}
+
+static int cdf_layout_signatures_valid(const CdfGameLayout* layout) {
+    const uint8_t* executable = (const uint8_t*)GetModuleHandleW(NULL);
+    const uint32_t image_size = cdf_image_size((HMODULE)executable);
+    return executable && layout && image_size != 0U &&
+        cdf_scene_ready_signature_valid(executable, layout) &&
+        cdf_furniture_mode_enter_function_signature_valid_for(
+            executable, layout) &&
+        cdf_runtime_signatures_valid_for(executable, image_size, layout);
+}
+
+static const CdfGameLayout* cdf_current_layout(void) {
+    if (!g_layout) {
+        if (cdf_layout_signatures_valid(&g_public_layout)) {
+            g_layout = &g_public_layout;
+        } else if (cdf_layout_signatures_valid(&g_beta_layout)) {
+            g_layout = &g_beta_layout;
+        }
+    }
+    return g_layout;
+}
+
+static int cdf_signatures_valid(void) {
+    const uint8_t* executable = (const uint8_t*)GetModuleHandleW(NULL);
+    const uint32_t image_size = cdf_image_size((HMODULE)executable);
+    const CdfGameLayout* layout = cdf_current_layout();
+    return executable && layout && image_size != 0U &&
+        cdf_runtime_signatures_valid_for(executable, image_size, layout);
+}
+
+static int cdf_furniture_rebuild_runtime_signatures_valid(void) {
+    const uint8_t* executable = (const uint8_t*)GetModuleHandleW(NULL);
+    const CdfGameLayout* layout = cdf_current_layout();
+    return executable && layout &&
+        cdf_furniture_rebuild_runtime_signatures_valid_for(
+            executable, layout);
+}
+
+static int cdf_furniture_mode_enter_hook_signature_valid(void) {
+    const uint8_t* executable = (const uint8_t*)GetModuleHandleW(NULL);
+    const CdfGameLayout* layout = cdf_current_layout();
+    return executable && layout &&
+        cdf_furniture_mode_enter_function_signature_valid_for(
+            executable, layout) &&
+        cdf_furniture_rebuild_runtime_signatures_valid_for(
+            executable, layout);
 }
 
 static int cdf_valid_vtable(
@@ -329,13 +591,15 @@ static int cdf_scene_components(
 
 static void* cdf_storage(void) {
     uint8_t* executable = (uint8_t*)GetModuleHandleW(NULL);
-    if (!executable || !cdf_readable(
-            executable + CDF_FURNITURE_STORAGE_GLOBAL_RVA,
+    const CdfGameLayout* layout = cdf_current_layout();
+    if (!executable || !layout || !cdf_readable(
+            executable + layout->furniture_storage_global_rva,
             sizeof(void*))) {
         return NULL;
     }
     __try {
-        return *(void**)(executable + CDF_FURNITURE_STORAGE_GLOBAL_RVA);
+        return *(void**)(
+            executable + layout->furniture_storage_global_rva);
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
         return NULL;
@@ -418,14 +682,17 @@ static void* cdf_find_piece(
     uint32_t component_count;
     uint32_t index;
     void* found = NULL;
+    const CdfGameLayout* layout = cdf_current_layout();
     *match_count = 0U;
-    if (!cdf_scene_components(scene_manager, &components, &component_count)) {
+    if (!layout ||
+        !cdf_scene_components(scene_manager, &components, &component_count)) {
         return NULL;
     }
     for (index = 0; index < component_count; ++index) {
         void* component = components[index];
         void* entry;
-        if (!cdf_valid_vtable(component, CDF_FURNITURE_PIECE_VTABLE_RVA) ||
+        if (!cdf_valid_vtable(
+                component, layout->furniture_piece_vtable_rva) ||
             cdf_delete_queued(component) || !cdf_readable(
                 component, CDF_PIECE_ENTRY_OFFSET + sizeof(void*))) {
             continue;
@@ -450,17 +717,37 @@ static void* cdf_find_furniture_ui(void* scene_manager) {
     void** components;
     uint32_t count;
     uint32_t index;
-    if (!cdf_scene_components(scene_manager, &components, &count)) {
+    const CdfGameLayout* layout = cdf_current_layout();
+    if (!layout || !cdf_scene_components(scene_manager, &components, &count)) {
         return NULL;
     }
     for (index = 0; index < count; ++index) {
         void* component = components[index];
         if (cdf_valid_vtable(
-                component, CDF_FURNITURE_BUILDING_UI_VTABLE_RVA)) {
+                component, layout->furniture_building_ui_vtable_rva)) {
             return component;
         }
     }
     return NULL;
+}
+
+int cdf_native_resolve_layout(CdfNativeLayoutInfo* output) {
+    const CdfGameLayout* layout;
+    if (!output) {
+        return 0;
+    }
+    memset(output, 0, sizeof(*output));
+    layout = cdf_current_layout();
+    if (!layout || !cdf_layout_signatures_valid(layout)) {
+        return 0;
+    }
+    output->build_name = layout->build_name;
+    output->scene_ready_update_rva = layout->scene_ready_update_rva;
+    output->furniture_mode_enter_rva =
+        layout->furniture_mode_enter_function_rva;
+    output->scene_ready_stolen_bytes = 15;
+    output->furniture_mode_enter_stolen_bytes = 15;
+    return 1;
 }
 
 int cdf_native_furniture_mode_active(void* scene_manager) {
@@ -563,8 +850,9 @@ CdfFurnitureUiRebuildResult cdf_native_prepare_furniture_ui_rebuild_on_enter(
     void** rows = NULL;
     uint32_t row_count = 0U;
     uint32_t index;
+    const CdfGameLayout* layout = cdf_current_layout();
     memset(&result, 0, sizeof(result));
-    if (!mode_enter_context || !cdf_readable(
+    if (!layout || !mode_enter_context || !cdf_readable(
             mode_enter_context, sizeof(void*) * 2U) ||
         (stale_row_key_count != 0U && !stale_row_keys)) {
         result.status = CDF_FURNITURE_UI_REBUILD_ENTER_CONTEXT_UNAVAILABLE;
@@ -581,7 +869,7 @@ CdfFurnitureUiRebuildResult cdf_native_prepare_furniture_ui_rebuild_on_enter(
             return result;
         }
         if (!cdf_valid_vtable(
-                component, CDF_FURNITURE_BUILDING_UI_VTABLE_RVA)) {
+                component, layout->furniture_building_ui_vtable_rva)) {
             result.status = CDF_FURNITURE_UI_REBUILD_COMPONENT_INVALID;
             return result;
         }
@@ -798,12 +1086,13 @@ CdfNativeMutationResult cdf_native_consume(
     uint64_t expected_flags) {
     CdfNativeMutationResult result;
     uint8_t* executable = (uint8_t*)GetModuleHandleW(NULL);
+    const CdfGameLayout* layout = cdf_current_layout();
     void* storage;
     void* entry;
     uint64_t flags;
     uint32_t piece_count;
     memset(&result, 0, sizeof(result));
-    if (!scene_manager || !cdf_signatures_valid()) {
+    if (!scene_manager || !layout || !cdf_signatures_valid()) {
         return result;
     }
     storage = cdf_storage();
@@ -816,7 +1105,7 @@ CdfNativeMutationResult cdf_native_consume(
     }
     __try {
         ((CdfStorageDeleteFn)(
-            executable + CDF_FURNITURE_STORAGE_DELETE_RVA))(
+            executable + layout->furniture_storage_delete_rva))(
                 storage, stable_key);
         result.success = (uint8_t)(
             cdf_find_entry(stable_key, expected_item, NULL) == NULL);
@@ -834,6 +1123,7 @@ CdfNativeStoreResult cdf_native_store(
     const char* expected_item) {
     CdfNativeStoreResult result;
     uint8_t* executable = (uint8_t*)GetModuleHandleW(NULL);
+    const CdfGameLayout* layout = cdf_current_layout();
     void* entry;
     void* piece;
     uint64_t flags;
@@ -843,7 +1133,8 @@ CdfNativeStoreResult cdf_native_store(
     void* after_grid;
     void* after_piece_entry;
     memset(&result, 0, sizeof(result));
-    if (!scene_manager || !expected_item || expected_item[0] == '\0') {
+    if (!layout || !scene_manager || !expected_item ||
+        expected_item[0] == '\0') {
         return result;
     }
     result.probe_flags |= CDF_STORE_PROBE_INPUT_VALID;
@@ -892,7 +1183,7 @@ CdfNativeStoreResult cdf_native_store(
             }
         }
         ((CdfStorePieceFn)(
-            executable + CDF_FURNITURE_STORE_PIECE_RVA))(piece);
+            executable + layout->furniture_store_piece_rva))(piece);
         result.probe_flags |= CDF_STORE_PROBE_CALL_COMPLETED;
         result.pending_component = piece;
         if (cdf_delete_queued(piece)) {
@@ -955,26 +1246,20 @@ CdfEnhancedPatchAudit cdf_native_ensure_enhanced_patches(void) {
         0xFF, 0xC0,
         0x90, 0x90, 0x90, 0x90};
     uint8_t* executable = (uint8_t*)GetModuleHandleW(NULL);
-    const uintptr_t value_rvas[] = {
-        CDF_FURNITURE_LIST_VALUE_FLAGS_1_RVA,
-        CDF_FURNITURE_LIST_VALUE_FLAGS_2_RVA,
-        CDF_FURNITURE_DETAIL_VALUE_FLAGS_1_RVA,
-        CDF_FURNITURE_DETAIL_VALUE_FLAGS_2_RVA,
-        CDF_FURNITURE_SORT_VALUE_FLAGS_1_RVA,
-        CDF_FURNITURE_SORT_VALUE_FLAGS_2_RVA};
+    const CdfGameLayout* layout = cdf_current_layout();
     CdfEnhancedPatchAudit result;
     const uint32_t count_site_bit =
-        1U << (sizeof(value_rvas) / sizeof(value_rvas[0]));
+        1U << CDF_ENHANCED_VALUE_PATCH_COUNT;
     const uint32_t all_sites_mask = (count_site_bit << 1U) - 1U;
     size_t index;
     memset(&result, 0, sizeof(result));
-    if (!executable || !cdf_signatures_valid()) {
+    if (!executable || !layout || !cdf_signatures_valid()) {
         result.conflict_mask = all_sites_mask;
         return result;
     }
-    for (index = 0; index < sizeof(value_rvas) / sizeof(value_rvas[0]);
-         ++index) {
-        const uint8_t* site = executable + value_rvas[index];
+    for (index = 0; index < CDF_ENHANCED_VALUE_PATCH_COUNT; ++index) {
+        const uint8_t* site =
+            executable + layout->furniture_value_flags_rvas[index];
         const uint32_t site_bit = 1U << index;
         if (!cdf_readable(site, sizeof(value_expected)) ||
             (memcmp(site, value_expected, sizeof(value_expected)) != 0 &&
@@ -984,7 +1269,7 @@ CdfEnhancedPatchAudit cdf_native_ensure_enhanced_patches(void) {
     }
     {
         const uint8_t* count_site =
-            executable + CDF_FURNITURE_LIST_EFFECT_COUNT_RVA;
+            executable + layout->furniture_list_effect_count_rva;
         if (!cdf_readable(count_site, sizeof(count_expected)) ||
             (memcmp(count_site, count_expected, sizeof(count_expected)) != 0 &&
              memcmp(
@@ -997,9 +1282,9 @@ CdfEnhancedPatchAudit cdf_native_ensure_enhanced_patches(void) {
     if (result.conflict_mask != 0U) {
         return result;
     }
-    for (index = 0; index < sizeof(value_rvas) / sizeof(value_rvas[0]);
-         ++index) {
-        uint8_t* site = executable + value_rvas[index];
+    for (index = 0; index < CDF_ENHANCED_VALUE_PATCH_COUNT; ++index) {
+        uint8_t* site =
+            executable + layout->furniture_value_flags_rvas[index];
         const uint32_t site_bit = 1U << index;
         if (memcmp(site, value_expected, sizeof(value_expected)) == 0) {
             if (!cdf_patch_bytes(
@@ -1018,7 +1303,7 @@ CdfEnhancedPatchAudit cdf_native_ensure_enhanced_patches(void) {
     }
     {
         uint8_t* count_site =
-            executable + CDF_FURNITURE_LIST_EFFECT_COUNT_RVA;
+            executable + layout->furniture_list_effect_count_rva;
         if (memcmp(count_site, count_expected, sizeof(count_expected)) == 0) {
             if (!cdf_patch_bytes(
                     count_site,

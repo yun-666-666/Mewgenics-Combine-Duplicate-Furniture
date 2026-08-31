@@ -21,6 +21,14 @@ struct EnhancedPatchAudit {
     std::uint32_t conflict_mask{};
 };
 
+struct NativeLayoutInfo {
+    std::string build_name;
+    std::uintptr_t scene_ready_update_rva{};
+    std::uintptr_t furniture_mode_enter_rva{};
+    int scene_ready_stolen_bytes{};
+    int furniture_mode_enter_stolen_bytes{};
+};
+
 enum class FurnitureUiRebuildStatus : int {
     NotAttempted = 0,
     Armed = 1,
@@ -82,6 +90,7 @@ private:
 };
 
 [[nodiscard]] bool FurnitureModeActive(void* scene_manager) noexcept;
+[[nodiscard]] bool ResolveNativeLayout(NativeLayoutInfo& output) noexcept;
 [[nodiscard]] bool FurnitureModeEnterRefreshSupported() noexcept;
 [[nodiscard]] FurnitureUiRebuildResult PrepareFurnitureUiRebuildOnEnter(
     void* mode_enter_context,

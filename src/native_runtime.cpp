@@ -168,6 +168,21 @@ const std::string& NativeTransactionPort::LastStoreProbeSummary() const noexcept
     return last_store_probe_summary_;
 }
 
+bool ResolveNativeLayout(NativeLayoutInfo& output) noexcept {
+    CdfNativeLayoutInfo native{};
+    if (cdf_native_resolve_layout(&native) == 0 || !native.build_name) {
+        output = {};
+        return false;
+    }
+    output = {
+        native.build_name,
+        native.scene_ready_update_rva,
+        native.furniture_mode_enter_rva,
+        native.scene_ready_stolen_bytes,
+        native.furniture_mode_enter_stolen_bytes};
+    return true;
+}
+
 bool FurnitureModeActive(void* scene_manager) noexcept {
     return cdf_native_furniture_mode_active(scene_manager) != 0;
 }
