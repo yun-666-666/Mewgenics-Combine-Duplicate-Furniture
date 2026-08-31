@@ -7,6 +7,7 @@ A Windows x64 Mewgenics mod that batch-combines duplicate furniture from the fur
 ## Features
 
 - Press `F8` in furniture mode to seal all deterministic pairs of identical furniture at the same rarity.
+- Supports Mewgenics `1.1.b21039` and the `1.1.b21220` beta with build-specific signature validation before native hooks are installed.
 - External dialogs are disabled by default, so `F8` seals the batch immediately without leaving the game window.
 - The known-stable external confirmation and status dialogs can be restored with `"show_dialogs": true`; the mod does not install a custom SWF or shared game-UI hook.
 - Two ordinary copies become one native Rare item with 2x base attributes.
@@ -95,6 +96,7 @@ The release layout is generated under `dist/Release`.
 ## 功能
 
 - 在家具界面按 `F8`，扫描所有稀有度相同的同款家具并封存确定性的合并组合。
+- 支持 Mewgenics `1.1.b21039` 正式版和 `1.1.b21220` beta；安装原生钩子前会先验证对应版本签名。
 - 默认关闭所有外部弹窗；按下 `F8` 后只封存批次，不会切出游戏窗口。
 - 如确实需要，可通过 `"show_dialogs": true` 恢复已知稳定的外部确认和状态窗口；本 MOD 不再安装自定义 SWF，也不再挂接共享游戏 UI。
 - 两件普通家具合并为一件原生 Rare 家具，基础属性为 2 倍。
