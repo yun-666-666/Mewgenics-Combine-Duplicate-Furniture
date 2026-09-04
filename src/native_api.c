@@ -63,7 +63,7 @@ static const CdfGameLayout g_public_layout = {
     0xEDE690,
     0xF082A8};
 
-static const CdfGameLayout g_beta_layout = {
+static const CdfGameLayout g_beta_21220_layout = {
     "1.1.b21220-beta",
     0x96ABD0,
     0x205D50,
@@ -79,6 +79,23 @@ static const CdfGameLayout g_beta_layout = {
     0x1AC37E,
     0xEE5858,
     0xF0F3C0};
+
+static const CdfGameLayout g_beta_25108421_layout = {
+    "Steam beta 25108421",
+    0x96AC50,
+    0x205D50,
+    0x2EFBF0,
+    0x13DA9A0,
+    0x2EADF7,
+    {0x1A0A32, 0x1A0AB7, 0x1A1C16, 0x1A1C96, 0x1A62CD, 0x1A6342},
+    0x1A5E90,
+    0x1A678C,
+    0x1A19E9,
+    0x1A6B6A,
+    0x1AC360,
+    0x1AC37E,
+    0xEE6858,
+    0xF10360};
 
 static const CdfGameLayout* g_layout;
 
@@ -503,8 +520,10 @@ static const CdfGameLayout* cdf_current_layout(void) {
     if (!g_layout) {
         if (cdf_layout_signatures_valid(&g_public_layout)) {
             g_layout = &g_public_layout;
-        } else if (cdf_layout_signatures_valid(&g_beta_layout)) {
-            g_layout = &g_beta_layout;
+        } else if (cdf_layout_signatures_valid(&g_beta_21220_layout)) {
+            g_layout = &g_beta_21220_layout;
+        } else if (cdf_layout_signatures_valid(&g_beta_25108421_layout)) {
+            g_layout = &g_beta_25108421_layout;
         }
     }
     return g_layout;
