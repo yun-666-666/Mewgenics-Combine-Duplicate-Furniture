@@ -912,7 +912,7 @@ CdfFurnitureUiRebuildResult cdf_native_prepare_furniture_ui_rebuild_on_enter(
             if (stable_key != 0U) {
                 *(uint64_t*)((uint8_t*)row +
                     CDF_FURNITURE_ROW_STABLE_KEY_OFFSET) =
-                    stable_key | (1ULL << 63U);
+                    stable_key ^ (1ULL << 63U);
                 ++result.rows_invalidated;
             }
         }
