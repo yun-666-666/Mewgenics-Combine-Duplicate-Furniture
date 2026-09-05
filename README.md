@@ -67,6 +67,10 @@ The supported language values are `zh-CN` and `en-US`. With `show_dialogs` set t
 3. With the default configuration, no window appears. Leave furniture mode to let the sealed batch start safely.
 4. Wait briefly for the batch to finish, then enter furniture mode again. Consumed copies are gone and the kept items are rebuilt with their new attributes.
 
+## Known issue
+
+- Some furniture may temporarily show its previous attributes after re-entering furniture mode. Switch to the next furniture page and then return to refresh the displayed attributes. The saved furniture attributes and room effects are already updated.
+
 The log is written to:
 
 ```text
@@ -155,6 +159,10 @@ Mods/CombineDuplicateFurniture/config.json
 2. 按配置的快捷键，默认是 `F8`。
 3. 默认配置下不会显示任何窗口。按键后退出家具界面，让已封存的批次安全开始执行。
 4. 稍等批次完成，再重新进入家具界面。多余家具会消失，保留家具会显示新的属性。
+
+## 已知问题
+
+- 部分家具在重新进入家具界面后，可能暂时显示合并前的属性。请翻到家具栏下一页，再翻回来，显示属性即可正常刷新；存档中的家具属性及房间效果已经完成更新。
 
 日志位置：
 
