@@ -511,6 +511,7 @@ void FinishBatch(void* scene_manager) {
     g_display_audit_targets.clear();
     g_display_audit_targets.reserve(g_batch.candidates.size());
     g_ui_rebuild_keys.clear();
+    g_ui_rebuild_keys.reserve(g_batch.candidates.size() * 2U);
     for (const auto& candidate : g_batch.candidates) {
         g_display_audit_targets.push_back({
             candidate.keep_key,
@@ -521,6 +522,7 @@ void FinishBatch(void* scene_manager) {
                     : cdf::kEnhancedFlag)});
         if (candidate.promote_to_rare || candidate.promote_to_enhanced) {
             g_ui_rebuild_keys.push_back(candidate.keep_key);
+            g_ui_rebuild_keys.push_back(candidate.consume_key);
         }
     }
     g_display_audit_enter_logged = false;
