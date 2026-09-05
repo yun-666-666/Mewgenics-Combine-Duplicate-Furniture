@@ -192,12 +192,9 @@ bool FurnitureModeEnterRefreshSupported() noexcept {
 }
 
 FurnitureUiRebuildResult PrepareFurnitureUiRebuildOnEnter(
-    void* mode_enter_context,
-    std::span<const std::uint64_t> stale_row_keys) noexcept {
+    void* mode_enter_context) noexcept {
     const auto result = cdf_native_prepare_furniture_ui_rebuild_on_enter(
-        mode_enter_context,
-        stale_row_keys.data(),
-        stale_row_keys.size());
+        mode_enter_context);
     return {
         static_cast<FurnitureUiRebuildStatus>(result.status),
         result.rows_scanned,

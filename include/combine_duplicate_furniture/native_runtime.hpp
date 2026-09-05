@@ -4,7 +4,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <span>
 #include <string>
 
 namespace cdf {
@@ -93,8 +92,7 @@ private:
 [[nodiscard]] bool ResolveNativeLayout(NativeLayoutInfo& output) noexcept;
 [[nodiscard]] bool FurnitureModeEnterRefreshSupported() noexcept;
 [[nodiscard]] FurnitureUiRebuildResult PrepareFurnitureUiRebuildOnEnter(
-    void* mode_enter_context,
-    std::span<const std::uint64_t> stale_row_keys) noexcept;
+    void* mode_enter_context) noexcept;
 [[nodiscard]] bool SceneContainsComponent(
     void* scene_manager,
     const void* component) noexcept;

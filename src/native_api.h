@@ -104,9 +104,7 @@ int cdf_native_resolve_layout(CdfNativeLayoutInfo* output);
 int cdf_native_furniture_mode_active(void* scene_manager);
 int cdf_native_furniture_mode_enter_refresh_supported(void);
 CdfFurnitureUiRebuildResult cdf_native_prepare_furniture_ui_rebuild_on_enter(
-    void* mode_enter_context,
-    const uint64_t* stale_row_keys,
-    size_t stale_row_key_count);
+    void* mode_enter_context);
 
 CdfNativeScanResult cdf_native_scan(
     void* scene_manager,

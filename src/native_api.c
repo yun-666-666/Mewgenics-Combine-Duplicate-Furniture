@@ -81,7 +81,7 @@ static const CdfGameLayout g_beta_21220_layout = {
     0xF0F3C0};
 
 static const CdfGameLayout g_beta_25108421_layout = {
-    "Steam beta 25108421",
+    "Steam beta 25108421/25131239",
     0x96AC50,
     0x205D50,
     0x2EFBF0,
@@ -847,23 +847,8 @@ static int cdf_furniture_ui_rows(
             *rows, (size_t)*count * sizeof(void*)));
 }
 
-static int cdf_contains_stable_key(
-    const uint64_t* stable_keys,
-    size_t count,
-    uint64_t stable_key) {
-    size_t index;
-    for (index = 0; index < count; ++index) {
-        if (stable_keys[index] == stable_key) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
 CdfFurnitureUiRebuildResult cdf_native_prepare_furniture_ui_rebuild_on_enter(
-    void* mode_enter_context,
-    const uint64_t* stale_row_keys,
-    size_t stale_row_key_count) {
+    void* mode_enter_context) {
     CdfFurnitureUiRebuildResult result;
     void* component;
     void** rows = NULL;
@@ -872,8 +857,7 @@ CdfFurnitureUiRebuildResult cdf_native_prepare_furniture_ui_rebuild_on_enter(
     const CdfGameLayout* layout = cdf_current_layout();
     memset(&result, 0, sizeof(result));
     if (!layout || !mode_enter_context || !cdf_readable(
-            mode_enter_context, sizeof(void*) * 2U) ||
-        (stale_row_key_count != 0U && !stale_row_keys)) {
+            mode_enter_context, sizeof(void*) * 2U)) {
         result.status = CDF_FURNITURE_UI_REBUILD_ENTER_CONTEXT_UNAVAILABLE;
         return result;
     }
@@ -909,8 +893,7 @@ CdfFurnitureUiRebuildResult cdf_native_prepare_furniture_ui_rebuild_on_enter(
             result.status = CDF_FURNITURE_UI_REBUILD_WRITE_FAILED;
             return result;
         }
-        if (stale_row_key_count != 0U &&
-            !cdf_furniture_ui_rows(component, &rows, &row_count)) {
+        if (!cdf_furniture_ui_rows(component, &rows, &row_count)) {
             result.status = CDF_FURNITURE_UI_REBUILD_ROW_CACHE_UNREADABLE;
             return result;
         }
@@ -926,11 +909,10 @@ CdfFurnitureUiRebuildResult cdf_native_prepare_furniture_ui_rebuild_on_enter(
             }
             stable_key = *(uint64_t*)((uint8_t*)row +
                 CDF_FURNITURE_ROW_STABLE_KEY_OFFSET);
-            if (cdf_contains_stable_key(
-                    stale_row_keys, stale_row_key_count, stable_key)) {
+            if (stable_key != 0U) {
                 *(uint64_t*)((uint8_t*)row +
                     CDF_FURNITURE_ROW_STABLE_KEY_OFFSET) =
-                    stable_key ^ (1ULL << 63U);
+                    stable_key | (1ULL << 63U);
                 ++result.rows_invalidated;
             }
         }
